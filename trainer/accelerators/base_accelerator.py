@@ -50,25 +50,29 @@ class MetricMode(BaseEnum):
 class BaseAcceleratorConfig:
     _target_: str = "trainer.accelerators.base_accelerator.Accelerator"
     output_dir: str = II("output_dir")
-    mixed_precision: PrecisionType = PrecisionType.NO
-    gradient_accumulation_steps: int = 1
+    save_dir: str = "test_video_gen_125M_0_5B"
+    mixed_precision: PrecisionType = PrecisionType.BF16
+    gradient_accumulation_steps: int = 8
     log_with: Optional[LoggerType] = LoggerType.WANDB
-    debug: DebugConfig = DebugConfig()
+    debug: DebugConfig = field(default_factory=lambda: DebugConfig())
     seed: int = 42
     resume_from_checkpoint: bool = True
-    max_steps: int = 4000
+    max_steps: int = 10000
     num_epochs: int = 10
     validate_steps: int = 100
     eval_on_start: bool = True
-    project_name: str = "reward"
+    project_name: str = "infinity_125M_vlm_0_5b"
     max_grad_norm: float = 1.0
     save_steps: int = 100
     metric_name: str = "accuracy"
     metric_mode: MetricMode = MetricMode.MAX
     limit_num_checkpoints: int = 1
-    save_only_if_best: bool = True
+    save_only_if_best: bool = False
     dynamo_backend: DynamoBackend = DynamoBackend.NO
-    keep_best_ckpts: bool = True
+    keep_best_ckpts: bool = False
+    
+    # training stage
+    stage_1_step: int = 50
 
 
 class BaseAccelerator(abc.ABC):
@@ -86,6 +90,9 @@ class BaseAccelerator(abc.ABC):
         self.mode = TrainingMode.TRAINING
         self.num_update_steps_per_epoch = None
         self.num_steps_per_epoch = None
+        
+        self.has_changed_to_stage_1 = False
+        self.has_changed_to_stage_2 = False
 
     def post_init(self):
         self.set_seed()
@@ -192,8 +199,7 @@ class BaseAccelerator(abc.ABC):
 
     def recalc_train_length_after_prepare(self, num_batches):
         num_update_steps_per_epoch = math.ceil(num_batches / self.cfg.gradient_accumulation_steps)
-        if self.cfg.max_steps is None:
-            self.cfg.max_steps = self.cfg.num_epochs * num_update_steps_per_epoch
+        self.cfg.max_steps = self.cfg.num_epochs * num_update_steps_per_epoch
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
         self.num_steps_per_epoch = num_batches
         self.cfg.num_epochs = math.ceil(self.cfg.max_steps / num_update_steps_per_epoch)
@@ -270,6 +276,9 @@ class BaseAccelerator(abc.ABC):
 
     def should_end(self):
         return self.global_step >= self.cfg.max_steps
+    
+    def should_stage_2(self):
+        return self.global_step >= self.cfg.stage_1_step
 
     def backward(self, loss):
         self.accelerator.backward(loss)

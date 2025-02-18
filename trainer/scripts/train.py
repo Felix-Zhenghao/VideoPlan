@@ -1,5 +1,10 @@
-import json
+import sys
 import os
+sys.path.append(f"{os.getcwd()}/video_gen/")
+sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
+sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
+
+import json
 from typing import Any
 
 import hydra
@@ -10,7 +15,8 @@ from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
 from trainer.accelerators.base_accelerator import BaseAccelerator
-from trainer.configs.configs import TrainerConfig, instantiate_with_cfg
+from trainer.configs.configs import TrainerConfig
+from config_util import instantiate_with_cfg
 
 logger = get_logger(__name__)
 
@@ -24,11 +30,14 @@ def load_dataloaders(cfg: DictConfig) -> Any:
         dataloaders[split] = torch.utils.data.DataLoader(
             dataset,
             shuffle=should_shuffle,
-            batch_size=cfg.batch_size,
+            batch_size=1 if split == cfg.valid_split_name else cfg.batch_size,
             collate_fn=dataset.collate_fn,
             num_workers=cfg.num_workers
         )
-    return dataloaders
+        
+        if split == cfg.valid_split_name:
+            valid_episode_length = dataset.cfg.validation_episodes_length
+    return dataloaders, valid_episode_length
 
 
 def load_optimizer(cfg: DictConfig, model: nn.Module):
@@ -80,7 +89,7 @@ def main(cfg: TrainerConfig) -> None:
     logger.info(f"Loading lr scheduler")
     lr_scheduler = load_scheduler(cfg.lr_scheduler, optimizer)
     logger.info(f"Loading dataloaders")
-    split2dataloader = load_dataloaders(cfg.dataset)
+    split2dataloader, valid_episodes_length = load_dataloaders(cfg.dataset)
 
     dataloaders = list(split2dataloader.values())
     model, optimizer, lr_scheduler, *dataloaders = accelerator.prepare(model, optimizer, lr_scheduler, *dataloaders)
@@ -91,14 +100,18 @@ def main(cfg: TrainerConfig) -> None:
     accelerator.recalc_train_length_after_prepare(len(split2dataloader[cfg.dataset.train_split_name]))
 
     accelerator.init_training(cfg)
+    
+    if accelerator.get_latest_checkpoint() is not None:
+        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
 
     def evaluate():
         model.eval()
         end_of_train_dataloader = accelerator.gradient_state.end_of_dataloader
         logger.info(f"*** Evaluating {cfg.dataset.valid_split_name} ***")
-        metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name])
-        accelerator.update_metrics(metrics)
-        accelerator.gradient_state.end_of_dataloader = end_of_train_dataloader
+        task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name], accelerator.cfg.save_dir, valid_episodes_length)
+        # metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name])
+        # accelerator.update_metrics(metrics)
+        # accelerator.gradient_state.end_of_dataloader = end_of_train_dataloader
 
     logger.info(f"task: {task.__class__.__name__}")
     logger.info(f"model: {model.__class__.__name__}")
@@ -123,7 +136,12 @@ def main(cfg: TrainerConfig) -> None:
             if accelerator.should_save():
                 accelerator.save_checkpoint()
 
-            model.train()
+            if accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2:
+                model.get_into_training_stage_2()
+                accelerator.has_changed_to_stage_2 = True
+            elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
+                model.get_into_training_stage_1()
+                accelerator.has_changed_to_stage_1 = True
 
             with accelerator.accumulate(model):
                 loss = task.train_step(model, criterion, batch)
@@ -160,13 +178,13 @@ def main(cfg: TrainerConfig) -> None:
 
     accelerator.wait_for_everyone()
     accelerator.load_best_checkpoint()
-    logger.info(f"*** Evaluating {cfg.dataset.valid_split_name} ***")
-    metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name])
-    accelerator.update_metrics(metrics)
-    logger.info(f"*** Evaluating {cfg.dataset.test_split_name} ***")
-    metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.test_split_name])
-    metrics = {f"{cfg.dataset.test_split_name}_{k}": v for k, v in metrics.items()}
-    accelerator.update_metrics(metrics)
+    # logger.info(f"*** Evaluating {cfg.dataset.valid_split_name} ***")
+    # metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name])
+    # accelerator.update_metrics(metrics)
+    # logger.info(f"*** Evaluating {cfg.dataset.test_split_name} ***")
+    # metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.test_split_name])
+    # metrics = {f"{cfg.dataset.test_split_name}_{k}": v for k, v in metrics.items()}
+    # accelerator.update_metrics(metrics)
     accelerator.unwrap_and_save(model)
     accelerator.end_training()
 

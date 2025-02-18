@@ -1,7 +1,7 @@
 from hydra.core.config_store import ConfigStore
 
-from trainer.criterions.clip_criterion import CLIPCriterionConfig
+from VideoPlan.trainer.criterions.infinity_criterion import InfinityVlmCriterionConfig
 
 
 cs = ConfigStore.instance()
-cs.store(group="criterion", name="clip", node=CLIPCriterionConfig)
+cs.store(group="criterion", name="infinity_vlm", node=InfinityVlmCriterionConfig)

@@ -9,16 +9,24 @@ from omegaconf import OmegaConf, MISSING, II
 
 from trainer.accelerators.base_accelerator import BaseAcceleratorConfig, BaseAccelerator
 
-
-@dataclass
-class MixedPrecisionConfig:
-    enabled: bool = MISSING
-
-
 @dataclass
 class DeepSpeedConfig:
-    fp16: MixedPrecisionConfig = MixedPrecisionConfig(enabled=False)
-    bf16: MixedPrecisionConfig = MixedPrecisionConfig(enabled=False)
+    bf16: dict = field(default_factory=lambda: {
+        "enabled": True,
+        "loss_scale": 0,
+        "initial_scale_power": 16,
+        "loss_scale_window": 1000,
+        "hysteresis": 2,
+        "min_loss_scale": 1
+    })
+    fp16: dict = field(default_factory=lambda: {
+        "enabled": False,
+        "loss_scale": 0,
+        "initial_scale_power": 16,
+        "loss_scale_window": 1000,
+        "hysteresis": 2,
+        "min_loss_scale": 1
+    })
     optimizer: dict = field(default_factory=lambda: {
         "type": "AdamW",
         "params": {
@@ -46,7 +54,7 @@ class DeepSpeedConfig:
         "reduce_bucket_size": 500000000,
         "contiguous_gradients": True
     })
-    gradient_accumulation_steps: int = 16
+    gradient_accumulation_steps: int = 8
     gradient_clipping: float = 1.0
     steps_per_print: int = 1
     train_batch_size: str = "auto"
@@ -58,7 +66,7 @@ class DeepSpeedConfig:
 @dataclass
 class DeepSpeedAcceleratorConfig(BaseAcceleratorConfig):
     _target_: str = "trainer.accelerators.deepspeed_accelerator.DeepSpeedAccelerator"
-    deepspeed: DeepSpeedConfig = DeepSpeedConfig()
+    deepspeed: DeepSpeedConfig = field(default_factory=lambda: DeepSpeedConfig())
     deepspeed_final: Any = None
 
 
@@ -97,7 +105,7 @@ class DeepSpeedAccelerator(BaseAccelerator):
         for obj in prepared:
             if isinstance(obj, torch.nn.Module):
                 if self.cfg.mixed_precision == PrecisionType.BF16:
-                    obj.forward = torch.autocast(device_type=self.device.type, dtype=torch.bfloat16)(obj.forward)
+                    obj.forward = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)(obj.forward)
                 elif self.cfg.mixed_precision == PrecisionType.FP16:
-                    obj.forward = torch.autocast(device_type=self.device.type, dtype=torch.float16)(obj.forward)
+                    obj.forward = torch.amp.autocast(device_type="cuda", dtype=torch.float16)(obj.forward)
         return prepared
