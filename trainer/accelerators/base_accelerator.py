@@ -73,6 +73,7 @@ class BaseAcceleratorConfig:
     
     # training stage
     stage_1_step: int = 50
+    enable_stage_1: bool = False
 
 
 class BaseAccelerator(abc.ABC):

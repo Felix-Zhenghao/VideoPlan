@@ -52,7 +52,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     
     # lerobot dataset config
     fps: int = 10
-    num_episodes: int = 1693
+    num_episodes: int = 400
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
         list(range(num_episodes))
     )

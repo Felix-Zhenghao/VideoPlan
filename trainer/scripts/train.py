@@ -1,3 +1,35 @@
+"""
+############################################
+# VERY IMPORTANT:
+############################################
+
+1. To make the code works, you need to change the LeRobot internal code:
+- Go to lerobot.common.datasets.utils
+- Go to `hf_transform_to_torch`
+- Change the line `to_tensor = transforms.ToTensor()` to `to_tensor = transforms.PILToTensor()`
+
+Effect of the change above: prevent lerobot from normalizing PIL images to values between [0,1] , so PIL images are only transformed into tensor with uint8 value between [0,255]
+
+--------------------------------------------
+
+2. To make the code works, you need to change the DeepSpeed internal code:
+- Go to deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine
+- Go to class TorchCheckpointEngine => load() method
+- Change the line `partition = torch.load(path, map_location=map_location)` to `partition = torch.load(path, map_location=map_location, weights_only=False)`
+
+Effect of the change ensures that deepspeed can correctly load the checkpoint file to resume training.
+The reason is new version of pytorch change the default setting of torch.load as weights_only=True, which only load the model weights, not the optimizer and scheduler states.
+
+--------------------------------------------
+
+3. Pay attention to the difference between DeepSpeed mixture-precision and PyTorch AMP:
+- DeepSpeed use lower precision for forward and backward pass, and fp32 for optimizer step
+- PyTorch AMP use fp32 for forward and backward pass, but automatically cast the input to lower precision for some ops.
+
+The result is that if there is some code disables the autocast, then the code uses DeepSpeed for training v.s. not using DeepSpeed for training will be different.
+The main difference is that you need to cast/uncast some inputs to make sure the inputs are in lower precision because DeepSpeed uses lower precision for parameters and gradients.
+"""
+
 import sys
 import os
 sys.path.append(f"{os.getcwd()}/video_gen/")
@@ -70,6 +102,7 @@ def verify_or_write_config(cfg: TrainerConfig):
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: TrainerConfig) -> None:
     accelerator = instantiate_with_cfg(cfg.accelerator)
+    # accelerator.end_training()
 
     if cfg.debug.activate and accelerator.is_main_process:
         import pydevd_pycharm
@@ -105,6 +138,7 @@ def main(cfg: TrainerConfig) -> None:
         model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
 
     def evaluate():
+        return
         model.eval()
         end_of_train_dataloader = accelerator.gradient_state.end_of_dataloader
         logger.info(f"*** Evaluating {cfg.dataset.valid_split_name} ***")
@@ -125,7 +159,17 @@ def main(cfg: TrainerConfig) -> None:
 
     for epoch in range(accelerator.cfg.num_epochs):
         train_loss, lr = 0.0, 0.0
+        
+        # skip epochs if resume training
+        if epoch < accelerator.epoch:
+            logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Skipping epoch {epoch}.")
+            accelerator.progress_bar.update(accelerator.num_steps_per_epoch)
+            if epoch == accelerator.epoch - 1:
+                logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Start to skipping the remaining batches in the last epoch you end the training. THIS MAY TAKE FEW MINUTES IF YOU DO LOTS OF PREPROCESSING DURING DATALOADING.")
+            continue
+
         for step, batch in enumerate(split2dataloader[cfg.dataset.train_split_name]):
+
             if accelerator.should_skip(epoch, step):
                 accelerator.update_progbar_step()
                 continue
@@ -136,7 +180,7 @@ def main(cfg: TrainerConfig) -> None:
             if accelerator.should_save():
                 accelerator.save_checkpoint()
 
-            if accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2:
+            if (accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2) or (not accelerator.cfg.enable_stage_1 and not accelerator.has_changed_to_stage_2):
                 model.get_into_training_stage_2()
                 accelerator.has_changed_to_stage_2 = True
             elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
