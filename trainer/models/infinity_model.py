@@ -41,6 +41,10 @@ class VaeConfig(BaseModelConfig):
     apply_spatial_patchify: bool = False
     vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
 
+@dataclass
+class DinoConfig(BaseModelConfig):
+    _target_: str = "transformers.AutoModel.from_pretrained"
+    pretrained_model_name_or_path: str = "facebook/dinov2-with-registers-large"
     
 @dataclass
 class InfinityConfig(BaseModelConfig):
@@ -49,7 +53,7 @@ class InfinityConfig(BaseModelConfig):
     """
     # _target_: str = "Infinity.infinity.models.infinity.Infinity"
     text_channels: int = 2048
-    text_maxlen: int = 1050 # NOTE: should change this whenever change the history image num
+    text_maxlen: int = 1350 # NOTE: should change this whenever change the history image num
     embed_dim: int = 768
     depth: int = 12
     num_heads: int = 8
@@ -93,6 +97,7 @@ class InfinityConfig(BaseModelConfig):
         [[1, 1, 1], [1, 2, 2], [1, 4, 4], [1, 6, 6], [1, 8, 8], [1, 12, 12], [1, 16, 16]]
     )
     d_vlm: int = 128
+    d_dino: int = 1024
 
 @dataclass
 class InfinityVlmConfig(BaseModelConfig):
@@ -109,7 +114,9 @@ class InfinityVlmConfig(BaseModelConfig):
     bsc_cfg: BscConfig = field(default_factory=lambda:
         BscConfig()
     )
-    
+    dino_cfg: DinoConfig = field(default_factory=lambda:
+        DinoConfig()
+    )
 
 class InfinityVlmModel(nn.Module):
     def __init__(self, cfg: InfinityVlmConfig):
@@ -119,19 +126,50 @@ class InfinityVlmModel(nn.Module):
         self.infinity_cfg: InfinityConfig = cfg.infinity_cfg
         self.vlm_cfg: VlmModelConfig = cfg.vlm_cfg
         self.bsc_cfg: BscConfig = cfg.bsc_cfg
+        self.dino_cfg: DinoConfig = cfg.dino_cfg
         
         self.vae = load_visual_tokenizer(self.vae_cfg).to("cuda")
         
         self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae).to("cuda")
         self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
         self.vlm = instantiate(self.vlm_cfg).to("cuda")
+        self.dino = instantiate(self.dino_cfg).to("cuda")
+        
+        # project dino and vlm inputs to 2048
+        if self.infinity_cfg.d_vlm !=  self.infinity_cfg.text_channels:
+            self.vlm_to_kv_compact = nn.Sequential(
+                nn.Linear(self.infinity_cfg.d_vlm, self.infinity_cfg.text_channels),
+                nn.GELU(approximate='tanh'),
+                nn.Linear(self.infinity_cfg.text_channels, self.infinity_cfg.text_channels),
+            )
+        if self.infinity_cfg.d_dino !=  self.infinity_cfg.text_channels:
+            self.dino_to_kv_compact = nn.Sequential(
+                nn.Linear(self.infinity_cfg.d_dino, self.infinity_cfg.text_channels),
+                nn.GELU(approximate='tanh'),
+                nn.Linear(self.infinity_cfg.text_channels, self.infinity_cfg.text_channels),
+            )
 
-    def prepare_condition_input(self, vlm_inputs):
+    def prepare_condition_input(self, vlm_inputs, dino_input):
+        
+        # vlm
         for k, v in vlm_inputs.items():
             vlm_inputs[k] = v.to("cuda")
         v_of_last_layer = self.vlm.generate(**vlm_inputs, max_new_tokens=200, do_sample=False, return_dict_in_generate=True)["past_key_values"][-1][1]
         v_of_last_layer = v_of_last_layer.reshape(v_of_last_layer.shape[0], v_of_last_layer.shape[2], -1) # turn from (b,h,len,dim) -> (b,len,h*dim)
         
+        # dino
+        for k, v in dino_input.items():
+            dino_input[k] = v.to("cuda")
+        dino_output = self.dino(**dino_input)
+        dino_condition = dino_output.last_hidden_state
+        
+        # projection to 2048
+        if self.infinity_cfg.d_vlm !=  self.infinity_cfg.text_channels:
+            v_of_last_layer = self.vlm_to_kv_compact(v_of_last_layer)
+        if self.infinity_cfg.d_dino !=  self.infinity_cfg.text_channels:
+            dino_condition = self.dino_to_kv_compact(dino_condition)
+        v_of_last_layer = torch.cat([v_of_last_layer, dino_condition], dim=1) # concat vlm and dino
+         
         bsz = v_of_last_layer.shape[0]
         lens: List[int] = [v_of_last_layer.shape[1]] * bsz
         max_len: int = max(lens)
@@ -141,7 +179,7 @@ class InfinityVlmModel(nn.Module):
         v_of_last_layer = v_of_last_layer.reshape(-1, v_of_last_layer.shape[-1])
         
         return (v_of_last_layer, lens, cu_seqlens_k.to("cuda"), max_len)
-    
+ 
     def tokenize_image_with_vae(self, next_frame):
         if self.vae_cfg.apply_spatial_patchify:
             vae_scale_schedule = [(pt, 2*ph, 2*pw) for pt, ph, pw in self.infinity_cfg.scale_schedule]
@@ -153,8 +191,8 @@ class InfinityVlmModel(nn.Module):
         
         return x_BLC_wo_prefix, gt_ms_idx_Bl
             
-    def forward(self, vlm_inputs=None, next_frame=None):
-        v_of_last_layer, lens, cu_seqlens_k, max_len = self.prepare_condition_input(vlm_inputs) # torch.bfloat16, ...
+    def forward(self, vlm_inputs=None, next_frame=None, dino_input=None):
+        v_of_last_layer, lens, cu_seqlens_k, max_len = self.prepare_condition_input(vlm_inputs, dino_input) # torch.bfloat16, ...
         x_BLC_wo_prefix, gt_ms_idx_Bl = self.tokenize_image_with_vae(next_frame.to("cuda")) # troch.float32, List[torch.int32]
         
         # print(f"🚀🚀🚀🚀🚀🚀🚀 {v_of_last_layer.dtype=}, {x_BLC_wo_prefix.dtype=}")
@@ -177,6 +215,7 @@ class InfinityVlmModel(nn.Module):
         Training stage 1:
         - vae: freezed
         - vlm: freezed
+        - dino: freezed
         - infinity: mostly freezed except for:
         ```
             - (vlm_to_kv_compact): Sequential(
@@ -188,47 +227,64 @@ class InfinityVlmModel(nn.Module):
         ```
         """
         self.vae.eval()
+        self.dino.eval()
         self.vlm.eval()
-        self.infinity.train()
+        self.infinity.eval()
         for param in self.vae.parameters():
             param.requires_grad = False
         for param in self.vlm.parameters():
             param.requires_grad = False
-        for name, param in self.infinity.named_parameters():
-            if "vlm_to_kv_compact" in name or "cfg_uncond" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+        for param in self.dino.parameters():
+            param.requires_grad = False
+        for param in self.infinity.parameters():
+            param.requires_grad = False
+
+        for param in self.dino_to_kv_compact.parameters():
+            param.requires_grad = True
+        for param in self.vlm_to_kv_compact.parameters():
+            param.requires_grad = True
         
         print("\n\n==========================================================================")
         print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only linear prob part trainable)\n")
         print(f"num. infinity trainable params: {int(sum(p.numel() for p in self.infinity.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VAE trainable params: {int(sum(p.numel() for p in self.vae.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. DINO trainable params: {int(sum(p.numel() for p in self.dino.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. Linear Prob trainable params: {int(sum(p.numel() for p in self.dino_to_kv_compact.parameters() if p.requires_grad) // 1e6)} + {int(sum(p.numel() for p in self.vlm_to_kv_compact.parameters() if p.requires_grad) // 1e6)}M")
         print("==========================================================================\n\n")
                 
     def get_into_training_stage_2(self,):
         """
         Training stage 2:
         - vae: freezed
+        - dino: freezed
         - vlm: trainable
         - infinity: trainable
         """
         self.vae.eval()
+        self.dino.eval()
         self.vlm.train()
         self.infinity.train()
         for param in self.vae.parameters():
+            param.requires_grad = False
+        for param in self.dino.parameters():
             param.requires_grad = False
         for param in self.vlm.parameters():
             param.requires_grad = True
         for param in self.infinity.parameters():
             param.requires_grad = True
+        for param in self.dino_to_kv_compact.parameters():
+            param.requires_grad = True
+        for param in self.vlm_to_kv_compact.parameters():
+            param.requires_grad = True
 
         print("\n\n==========================================================================")
-        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 2 (whole vlm and infinity trainable)\n")
+        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only linear prob part trainable)\n")
         print(f"num. infinity trainable params: {int(sum(p.numel() for p in self.infinity.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VAE trainable params: {int(sum(p.numel() for p in self.vae.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. DINO trainable params: {int(sum(p.numel() for p in self.dino.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. Linear Prob trainable params: {int(sum(p.numel() for p in self.dino_to_kv_compact.parameters() if p.requires_grad) // 1e6)} + {int(sum(p.numel() for p in self.vlm_to_kv_compact.parameters() if p.requires_grad) // 1e6)}M")
         print("==========================================================================\n\n")
     
     @property

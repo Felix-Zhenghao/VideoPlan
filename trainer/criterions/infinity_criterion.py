@@ -42,6 +42,7 @@ class InfintyVlmCriterion(_Loss):
         logits_BLV, gt_ms_idx_Bl = model(
             vlm_inputs=batch["vlm_inputs"],
             next_frame=batch["future_img"],
+            dino_input=batch["dino_input"],
         )
         
         # loss calculation

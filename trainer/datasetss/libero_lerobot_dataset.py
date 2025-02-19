@@ -28,6 +28,11 @@ def simple_collate(batch, column_name):
 class VlmProcessorConfig:
     _target_: str = "transformers.AutoProcessor.from_pretrained"
     pretrained_model_name_or_path: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
+
+@dataclass
+class DinoProcessorConfig:
+    _target_: str = "transformers.AutoImageProcessor.from_pretrained"
+    pretrained_model_name_or_path: str = "facebook/dinov2-with-registers-large"
     
 @dataclass
 class BscConfig:
@@ -52,22 +57,22 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     
     # lerobot dataset config
     fps: int = 10
-    num_episodes: int = 400
+    num_episodes: int = 1693
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
         list(range(num_episodes))
     )
     validation_episodes: Optional[List[int]] = field(default_factory=lambda:
-        [0, 50]
+        [0]
     )
     test_episodes: Optional[List[int]] = field(default_factory=lambda:
         [0]
     )
     validation_episodes_length: List[int] = field(default_factory=lambda:
-        [214,290]
+        [0]
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-0.3, -0.2, -0.1, 0., 0.1],
+        "image": [-100., -0.8, -0.5, -0.2, 0., 0.1], # a very big first value is needed to load the first image
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
@@ -78,6 +83,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     task_description_name: str = "task"
     history_imgs_name: str = "image"
     future_imgs_name: str = "future_image"
+    dino_input_name: str = "dino_input"
     
     apply_spatial_patchify: bool = False
     future_img_length: int = 1
@@ -87,6 +93,9 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
 
     vlm_processor: VlmProcessorConfig = field(default_factory = lambda: 
         VlmProcessorConfig()
+    )
+    dino_processor: DinoProcessorConfig = field(default_factory = lambda:
+        DinoProcessorConfig()
     )
     bsc: Optional[BscConfig] = None
 
@@ -103,6 +112,8 @@ class LiberoLerobotDataset(BaseDataset):
 
         self.vlm_processor = instantiate(cfg.vlm_processor)
         # logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Loaded VLM processor")
+        
+        self.dino_processor = instantiate(cfg.dino_processor)
 
     def load_hf_dataset(self, split: str) -> Dataset:
         if split == self.cfg.train_split_name:
@@ -147,6 +158,12 @@ class LiberoLerobotDataset(BaseDataset):
         prompts = [self.vlm_processor.apply_chat_template(prompt, add_generation_prompt=True) for prompt in prompts]
         vlm_inputs = self.vlm_processor(videos=torch.unbind(history_imgs, dim=0), text=prompts, return_tensors='pt', padding=True)
         return vlm_inputs
+    
+    def process_dino_inputs(self, example):
+        images = example[self.cfg.dino_input_name].permute(0, 2, 3, 1).numpy()
+        images = [Image.fromarray(img) for img in images]
+        inputs = self.dino_processor(images=images, return_tensors="pt")
+        return inputs
 
     def process_vae_inputs(self, future_img, vae):
         if self.cfg.apply_spatial_patchify:
@@ -189,12 +206,14 @@ class LiberoLerobotDataset(BaseDataset):
         full_images = collated_batch["image"]
 
         # Split the images
-        collated_batch["image"] = full_images[:, :-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
+        collated_batch["dino_input"] = full_images[:, 0, ...] # [batch_size, 3, 256, 256]
+        collated_batch["image"] = full_images[:, 1:-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
         collated_batch["future_img"] = full_images[:, -self.cfg.future_img_length:, ...]   # [batch_size, future_img_len, 3, 256, 256]
         
         collated_batch["future_img"] = collated_batch["future_img"].float().div(255).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
 
         vlm_inputs = self.process_vlm_inputs(collated_batch)
+        collated_batch["dino_input"] = self.process_dino_inputs(collated_batch)
 
         # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
         # add vlm_inputs to example
