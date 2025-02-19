@@ -216,20 +216,12 @@ class InfinityVlmModel(nn.Module):
         - vae: freezed
         - vlm: freezed
         - dino: freezed
-        - infinity: mostly freezed except for:
-        ```
-            - (vlm_to_kv_compact): Sequential(
-                (0): Linear(in_features=128, out_features=2048, bias=True)
-                (1): GELU(approximate='tanh')
-                (2): Linear(in_features=2048, out_features=2048, bias=True)
-            )
-            - (cfg_uncond)
-        ```
+        - infinity: trainable
         """
         self.vae.eval()
         self.dino.eval()
         self.vlm.eval()
-        self.infinity.eval()
+        self.infinity.train()
         for param in self.vae.parameters():
             param.requires_grad = False
         for param in self.vlm.parameters():
@@ -237,7 +229,7 @@ class InfinityVlmModel(nn.Module):
         for param in self.dino.parameters():
             param.requires_grad = False
         for param in self.infinity.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
 
         for param in self.dino_to_kv_compact.parameters():
             param.requires_grad = True

@@ -72,7 +72,7 @@ class BaseAcceleratorConfig:
     keep_best_ckpts: bool = False
     
     # training stage
-    stage_1_step: int = 120
+    stage_1_step: int = 350
     enable_stage_1: bool = True
 
 
