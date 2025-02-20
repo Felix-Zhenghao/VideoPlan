@@ -42,7 +42,7 @@ class BscConfig:
 @dataclass
 class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     _target_: str = "VideoPlan.trainer.datasetss.libero_lerobot_dataset.LiberoLerobotDataset"
-    dataset_name: str = "Felix-Zhenghao/libero"
+    dataset_name: str = "physical-intelligence/libero"
     dataset_config_name: str = "null"
 
     train_split_name: str = "train"
@@ -52,7 +52,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     
     # lerobot dataset config
     fps: int = 10
-    num_episodes: int = 400
+    num_episodes: int = 1000
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
         list(range(num_episodes))
     )
@@ -63,11 +63,11 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         [0]
     )
     validation_episodes_length: List[int] = field(default_factory=lambda:
-        [214,290]
+        [0]
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-0.3, -0.2, -0.1, 0., 0.1],
+        "image": [-0.8, -0.4, -0.2, 0., 0.2],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future

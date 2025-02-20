@@ -32,9 +32,8 @@ The main difference is that you need to cast/uncast some inputs to make sure the
 
 import sys
 import os
-sys.path.append(f"{os.getcwd()}/video_gen/")
-sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
-sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
+sys.path.append(f"{os.getcwd()}/VideoPlan/")
+sys.path.append(f"{os.getcwd()}/Infinity/")
 
 import json
 from typing import Any
@@ -134,8 +133,8 @@ def main(cfg: TrainerConfig) -> None:
 
     accelerator.init_training(cfg)
     
-    if accelerator.get_latest_checkpoint() is not None:
-        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
+    # if accelerator.get_latest_checkpoint() is not None:
+    #     model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
 
     def evaluate():
         return

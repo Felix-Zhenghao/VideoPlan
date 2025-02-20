@@ -39,7 +39,7 @@ class BscConfig:
 class VaeConfig(BaseModelConfig):
     vae_type: int = 16
     apply_spatial_patchify: bool = False
-    vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
+    vae_path: str = f"{os.getenv("HF_HOME")}/hub/models--FoundationVision--Infinity/snapshots/6577e6454575816928a2a8477906c84a49356b9a/infinity_vae_d16.pth"
 
     
 @dataclass
@@ -177,15 +177,7 @@ class InfinityVlmModel(nn.Module):
         Training stage 1:
         - vae: freezed
         - vlm: freezed
-        - infinity: mostly freezed except for:
-        ```
-            - (vlm_to_kv_compact): Sequential(
-                (0): Linear(in_features=128, out_features=2048, bias=True)
-                (1): GELU(approximate='tanh')
-                (2): Linear(in_features=2048, out_features=2048, bias=True)
-            )
-            - (cfg_uncond)
-        ```
+        - infinity: trainable
         """
         self.vae.eval()
         self.vlm.eval()
@@ -195,10 +187,7 @@ class InfinityVlmModel(nn.Module):
         for param in self.vlm.parameters():
             param.requires_grad = False
         for name, param in self.infinity.named_parameters():
-            if "vlm_to_kv_compact" in name or "cfg_uncond" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+            param.requires_grad = True
         
         print("\n\n==========================================================================")
         print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only linear prob part trainable)\n")
