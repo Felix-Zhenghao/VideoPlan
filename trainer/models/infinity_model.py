@@ -31,7 +31,7 @@ class VlmModelConfig(BaseModelConfig):
 class BscConfig:
     noise_apply_layers: int = 13
     noise_apply_requant: bool = True
-    noise_apply_strength: float = 0.3
+    noise_apply_strength: float = 0.1
     apply_spatial_patchify: bool = False
     debug_bsc: bool = False
     

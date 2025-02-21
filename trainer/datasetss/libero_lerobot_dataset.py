@@ -34,7 +34,7 @@ class BscConfig:
     _target_: str = "Infinity.infinity.models.bitwise_self_correction.BitwiseSelfCorrection"
     noise_apply_layers=13
     noise_apply_requant=True
-    noise_apply_strength=0.3
+    noise_apply_strength=0.1
     apply_spatial_patchify=False
     debug_bsc=False
 
