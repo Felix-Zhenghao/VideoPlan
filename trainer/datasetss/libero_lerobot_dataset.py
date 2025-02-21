@@ -27,16 +27,7 @@ def simple_collate(batch, column_name):
 @dataclass
 class VlmProcessorConfig:
     _target_: str = "transformers.AutoProcessor.from_pretrained"
-    pretrained_model_name_or_path: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
-    
-@dataclass
-class BscConfig:
-    _target_: str = "Infinity.infinity.models.bitwise_self_correction.BitwiseSelfCorrection"
-    noise_apply_layers=13
-    noise_apply_requant=True
-    noise_apply_strength=0.3
-    apply_spatial_patchify=False
-    debug_bsc=False
+    pretrained_model_name_or_path: str = "google/paligemma2-3b-pt-224"
 
 
 @dataclass
@@ -69,9 +60,9 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
         "image": [-0.3, -0.2, -0.1, 0., 0.1],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
-        # "state": [-0.2, -0.1, 0, 0.1],
+        "state": [-0.3, -0.2, -0.1, 0., 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
-        # "actions": [t / FPS for t in range(16)],
+        "actions": [t / 10 for t in range(16)],
     })
 
     # columns
@@ -88,7 +79,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     vlm_processor: VlmProcessorConfig = field(default_factory = lambda: 
         VlmProcessorConfig()
     )
-    bsc: Optional[BscConfig] = None
+
 
 
 class LiberoLerobotDataset(BaseDataset):
@@ -133,32 +124,12 @@ class LiberoLerobotDataset(BaseDataset):
         return dataset
 
     def process_vlm_inputs(self, example):
-        task_descriptions = example[self.cfg.task_description_name]
-        history_imgs = example[self.cfg.history_imgs_name]
-        prompts = [[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "video"},
-                    {"type": "text", "text": f"The video I give you shows the robot doing the task {task}. Describe things on the table and the whole environment in great details. Finally describe what you think the robot should do next."},
-                ],
-            }
-        ] for task in task_descriptions]
-        prompts = [self.vlm_processor.apply_chat_template(prompt, add_generation_prompt=True) for prompt in prompts]
-        vlm_inputs = self.vlm_processor(videos=torch.unbind(history_imgs, dim=0), text=prompts, return_tensors='pt', padding=True)
-        return vlm_inputs
+        image = example["future_img"].permute(0, 2, 3, 1).numpy()
+        image = [Image.fromarray(img) for img in image]
+        prompt = ""
+        model_inputs = self.vlm_processor(text=[prompt]*len(image), images=image, return_tensors="pt")
 
-    def process_vae_inputs(self, future_img, vae):
-        if self.cfg.apply_spatial_patchify:
-            vae_scale_schedule = [(pt, 2*ph, 2*pw) for pt, ph, pw in self.cfg.scale_schedule]
-        else:
-            vae_scale_schedule = [(pt, ph, pw) for pt, ph, pw in self.cfg.scale_schedule]
-            
-        raw_features, _, _ = vae.encode_for_raw_features(future_img, scale_schedule=vae_scale_schedule)
-        bitwise_self_correction = instantiate(self.cfg.bsc, vae=vae)
-        x_BLC_wo_prefix, gt_ms_idx_Bl = bitwise_self_correction.flip_requant(vae_scale_schedule, future_img, raw_features, "cuda") # x_BLC_wo_prefix: torch.Size([bs, 2*2+3*3+...+64*64, d or 4d])
-
-        return x_BLC_wo_prefix, gt_ms_idx_Bl
+        return model_inputs
 
     # TODO: check how to define the __getitem__ method
     def __getitem__(self, idx):
@@ -192,7 +163,7 @@ class LiberoLerobotDataset(BaseDataset):
         collated_batch["image"] = full_images[:, :-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
         collated_batch["future_img"] = full_images[:, -self.cfg.future_img_length:, ...]   # [batch_size, future_img_len, 3, 256, 256]
         
-        collated_batch["future_img"] = collated_batch["future_img"].float().div(255).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
+        collated_batch["future_img"] = collated_batch["future_img"].squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
 
         vlm_inputs = self.process_vlm_inputs(collated_batch)
 

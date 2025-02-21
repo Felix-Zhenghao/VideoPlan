@@ -134,9 +134,6 @@ def main(cfg: TrainerConfig) -> None:
 
     accelerator.init_training(cfg)
     
-    if accelerator.get_latest_checkpoint() is not None:
-        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
-
     def evaluate():
         return
         model.eval()
@@ -181,11 +178,12 @@ def main(cfg: TrainerConfig) -> None:
                 accelerator.save_checkpoint()
 
             if (accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2) or (not accelerator.cfg.enable_stage_1 and not accelerator.has_changed_to_stage_2):
-                model.get_into_training_stage_2()
+                model.paligemma.train()
+                for param in model.paligemma.parameters():
+                    param.requires_grad = True
+                print("num of trainable parameters:")
+                print(sum(p.numel() for p in model.paligemma.parameters() if p.requires_grad))
                 accelerator.has_changed_to_stage_2 = True
-            elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
-                model.get_into_training_stage_1()
-                accelerator.has_changed_to_stage_1 = True
 
             with accelerator.accumulate(model):
                 loss = task.train_step(model, criterion, batch)

@@ -52,7 +52,7 @@ class BaseAcceleratorConfig:
     output_dir: str = II("output_dir")
     save_dir: str = "test_video_gen_125M_0_5B"
     mixed_precision: PrecisionType = PrecisionType.BF16
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 2
     log_with: Optional[LoggerType] = LoggerType.WANDB
     debug: DebugConfig = field(default_factory=lambda: DebugConfig())
     seed: int = 42
@@ -61,7 +61,7 @@ class BaseAcceleratorConfig:
     num_epochs: int = 10
     validate_steps: int = 100
     eval_on_start: bool = True
-    project_name: str = "infinity_125M_vlm_0_5b"
+    project_name: str = "pressure_test"
     max_grad_norm: float = 1.0
     save_steps: int = 100
     metric_name: str = "accuracy"
