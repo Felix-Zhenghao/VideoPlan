@@ -52,7 +52,7 @@ class BaseAcceleratorConfig:
     output_dir: str = II("output_dir")
     save_dir: str = "test_video_gen_125M_0_5B"
     mixed_precision: PrecisionType = PrecisionType.BF16
-    gradient_accumulation_steps: int = 8
+    gradient_accumulation_steps: int = 2
     log_with: Optional[LoggerType] = LoggerType.WANDB
     debug: DebugConfig = field(default_factory=lambda: DebugConfig())
     seed: int = 42
@@ -66,14 +66,14 @@ class BaseAcceleratorConfig:
     save_steps: int = 100
     metric_name: str = "accuracy"
     metric_mode: MetricMode = MetricMode.MAX
-    limit_num_checkpoints: int = 1
+    limit_num_checkpoints: int = 3
     save_only_if_best: bool = False
     dynamo_backend: DynamoBackend = DynamoBackend.NO
     keep_best_ckpts: bool = False
     
     # training stage
     stage_1_step: int = 50
-    enable_stage_1: bool = False
+    enable_stage_1: bool = True
 
 
 class BaseAccelerator(abc.ABC):

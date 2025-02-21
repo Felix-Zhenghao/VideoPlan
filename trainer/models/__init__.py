@@ -1,7 +1,7 @@
 from hydra.core.config_store import ConfigStore
 
-from VideoPlan.trainer.models.infinity_model import InfinityVlmConfig, BaseModelConfig
+from video_gen.VideoPlan.trainer.models.qwen_vla_model import InfinityVlmConfig, BaseModelConfig
 
 cs = ConfigStore.instance()
-cs.store(group="model", name="infinity_vlm", node=InfinityVlmConfig)
+cs.store(group="model", name="qwen_vla", node=InfinityVlmConfig)
 
