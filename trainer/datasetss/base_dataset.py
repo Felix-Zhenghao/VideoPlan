@@ -9,7 +9,7 @@ class BaseDatasetConfig:
     valid_split_name: str = "validation"
     test_split_name: str = "test"
 
-    batch_size: int = 12
+    batch_size: int = 4
     num_workers: int = 2
     drop_last: bool = True
 
