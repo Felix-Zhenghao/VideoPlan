@@ -63,11 +63,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     history_imgs_name: str = "image"
     future_imgs_name: str = "future_image"
     
-    apply_spatial_patchify: bool = False
     future_img_length: int = 1
-    scale_schedule: List[List[int]] = field(default_factory=lambda: 
-        [[1, 1, 1], [1, 2, 2], [1, 4, 4], [1, 6, 6], [1, 8, 8], [1, 12, 12], [1, 16, 16]]
-    )
 
 
 class LiberoLerobotDataset(BaseDataset):
