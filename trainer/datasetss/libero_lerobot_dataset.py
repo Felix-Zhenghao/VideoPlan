@@ -49,13 +49,13 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     validation_episodes_length: List[int] = field(default_factory=lambda:
         [214,290]
     )
-    delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
+    delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda fps=fps: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
         "image": [-0.3, -0.2, -0.1, 0., 0.1],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
-        # "state": [-0.2, -0.1, 0, 0.1],
+        "state": [-0.3, -0.2, -0.1, 0.],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
-        # "actions": [t / FPS for t in range(16)],
+        "actions": [t / fps for t in range(16)],
     })
 
     # columns

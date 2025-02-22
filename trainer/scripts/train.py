@@ -42,6 +42,7 @@ If you don't do so, you will always get `list object does not have attribute res
 
 import sys
 import os
+sys.path.append(f"{os.getcwd()}/vlap/")
 sys.path.append(f"{os.getcwd()}/video_gen/")
 sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
 sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
@@ -111,6 +112,13 @@ def verify_or_write_config(cfg: TrainerConfig):
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: TrainerConfig) -> None:
+    
+    # adjust config
+    dino_siglip_image_sequence_len = len(cfg.dataset.delta_timestamps["image"]) - cfg.dataset.future_img_length
+    cfg.model.dino_siglip_cfg.image_sequence_len = dino_siglip_image_sequence_len
+    logger.info(f"Something has been adjusted: {cfg.model.dino_siglip_cfg.image_sequence_len=} accroding to:\n {cfg.dataset.delta_timestamps=}")
+    
+    
     accelerator = instantiate_with_cfg(cfg.accelerator)
     # accelerator.end_training()
 

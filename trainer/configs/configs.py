@@ -15,9 +15,9 @@ from trainer.tasks.base_task import BaseTaskConfig
 
 defaults = [
     {"accelerator": "deepspeed"},
-    {"task": "infinity_vlm"},
-    {"model": "infinity_vlm"},
-    {"criterion": "infinity_vlm"},
+    {"task": "qwen_vla"},
+    {"model": "qwen_vla"},
+    {"criterion": "qwen_vla"},
     {"dataset": "libero"},
     {"optimizer": "dummy"},
     {"lr_scheduler": "dummy"},
