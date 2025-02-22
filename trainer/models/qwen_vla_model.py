@@ -4,6 +4,7 @@ sys.path.append(f"{os.getcwd()}/video_gen/")
 sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
 sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
 
+import gc
 from typing import Any, Optional, List
 from dataclasses import dataclass, field
 from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
@@ -71,6 +72,7 @@ class Vla(nn.Module):
     def __init__(self, cfg: VlaConfig):
         super().__init__()
         
+        self.vla_cfg = cfg
         self.llm_cfg = cfg.llm_cfg
         self.dino_siglip_cfg = cfg.dino_siglip_cfg
         self.vlm_cfg = cfg.vlm_cfg
@@ -82,26 +84,48 @@ class Vla(nn.Module):
         self.vlm = _locate(self.vlm_cfg._target_)(model_id=self.vlm_cfg.model_id, llm_backbone=self.llm, vison_backbone=self.dino_siglip)
         self.action_head = instantiate_with_cfg(cfg=self.action_head_cfg, num_layers=self.vlm_cfg.vlm_hidden_layers, llm_emb_dim=self.vlm_cfg.vlm_embed_dim)
         
-        # some utility for image transformation
-        self.dino_siglip_image_transform = self.dino_siglip.get_image_transform()
+    def get_dino_siglip_image_transform(self):
+        return self.dino_siglip.get_image_transform()
+    
+    def get_llm_tokenizer(self):
+        return self.llm.get_tokenizer()
 
-    def prepare_dino_siglip_input(self, hitory_images: List[PILImage]):
-        """
-        Use image transformation needed for dino_siglip model to transform the image history.
+    def forward(self, batch):
+        out = self.vlm(
+            input_ids=batch["input_ids"],
+            pixel_values={"dino":batch["dino"].to("cuda"),"siglip":batch["siglip"].to("cuda")},
+            use_cache=True, # let it return past_key_values
+        )
         
-        Return {"dino": torch.Tensor, "siglip": torch.Tensor}
-        """
+        vlm_v_layers: List[torch.Tensor] = out['past_key_values'].value_cache # [bsz, num_kv_heads, seq_len, kv_head_dim]
+        vlm_k_layers: List[torch.Tensor] = out['past_key_values'].key_cache # [bsz, num_kv_heads, seq_len, kv_head_dim]
         
-        return self.dino_siglip_image_transform(hitory_images)
-
-    def tokenize_proprio_and_action(self, next_frame):
-        """
-        Tokenize action and proprio for action head input.
-        """
-            
-    def forward(self, llm_inputs=None, history_images=None):
-        vlm_out = None
-        pass
+        # free memory
+        del out
+        gc.collect()
+        
+        transform_vlm_layers = lambda vlm_v_layers: (
+            torch.stack(vlm_v_layers, dim=0)  # [num_layers, bsz, num_kv_heads, seq_len, kv_head_dim]
+            .permute(0, 1, 3, 2, 4)  # [num_layers, bsz, seq_len, num_kv_heads, kv_head_dim]
+            .reshape(vlm_v_layers.size(0), vlm_v_layers.size(1), vlm_v_layers.size(3), -1)
+            # reshape to [num_layers, bsz, seq_len, num_kv_heads*kv_head_dim]
+        )
+        
+        vlm_v_layers = transform_vlm_layers(vlm_v_layers)
+        vlm_k_layers = transform_vlm_layers(vlm_k_layers)
+        
+        if self.vla_cfg.algorithm == "bc":
+            predicted_actions = self.action_head(
+                proprio=batch["proprio"],
+                noisy_action=torch.zero([1, batch["action"].shape[1], self.action_head_cfg.action_dim]).to("cuda"),
+                t=torch.zeros(1).to("cuda"),
+                llm_key=vlm_k_layers,
+                llm_value=vlm_v_layers
+            )
+        elif self.vla_cfg.algorithm == "flow-matching":
+            raise NotImplementedError("flow-matching algorithm is not implemented yet")
+        
+        return predicted_actions
     
     def load_pretrained_vla(self, pretrained_path: str):
         pass
@@ -109,20 +133,66 @@ class Vla(nn.Module):
     def get_into_training_stage_1(self,):
         """
         Training stage 1:
-        ```
+        
+        - dino_siglip: not trainable
+        - llm: not trainable
+        - action_head: trainable
         """
+        
+        self.llm.eval()
+        self.dino_siglip.eval()
+        self.vlm.eval()
+        self.action_head.train()
+        
+        for param in self.action_head.parameters():
+            param.requires_grad = True
+        for param in self.llm.parameters():
+            param.requires_grad = False
+        for param in self.dino_siglip.parameters():
+            param.requires_grad = False
+        for param in self.vlm.parameters():
+            param.requires_grad = False
 
         print("\n\n==========================================================================")
         print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only linear prob part trainable)\n")
+        print("[DINO_SIGLIP] Total num of trainable parameters: ", sum(p.numel() for p in self.dino_siglip.parameters() if p.requires_grad))
+        print("[LLM] Total num of trainable parameters: ", sum(p.numel() for p in self.llm.parameters() if p.requires_grad))
+        print("[VLM] Total num of trainable parameters: ", sum(p.numel() for p in self.vlm.parameters() if p.requires_grad))
+        print("[Action Head] Total num of trainable parameters: ", sum(p.numel() for p in self.action_head.parameters() if p.requires_grad))
+        print("[VLA] Total num of trainable parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
         print("==========================================================================\n\n")
                 
     def get_into_training_stage_2(self,):
         """
         Training stage 2:
+        
+        - llm: trainable
+        - dino_siglip: trainable
+        - vlm: trainable
+        - action_head: trainable
         """
+        
+        self.llm.train()
+        self.dino_siglip.train()
+        self.vlm.train()
+        self.action_head.train()
+        
+        for param in self.action_head.parameters():
+            param.requires_grad = True
+        for param in self.llm.parameters():
+            param.requires_grad = True
+        for param in self.dino_siglip.parameters():
+            param.requires_grad = True
+        for param in self.vlm.parameters():
+            param.requires_grad = True
 
         print("\n\n==========================================================================")
         print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 2 (whole vlm and infinity trainable)\n")
+        print("[DINO_SIGLIP] Total num of trainable parameters: ", sum(p.numel() for p in self.dino_siglip.parameters() if p.requires_grad))
+        print("[LLM] Total num of trainable parameters: ", sum(p.numel() for p in self.llm.parameters() if p.requires_grad))
+        print("[VLM] Total num of trainable parameters: ", sum(p.numel() for p in self.vlm.parameters() if p.requires_grad))
+        print("[Action Head] Total num of trainable parameters: ", sum(p.numel() for p in self.action_head.parameters() if p.requires_grad))
+        print("[VLA] Total num of trainable parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
         print("==========================================================================\n\n")
     
     @property
