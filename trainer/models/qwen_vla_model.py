@@ -16,7 +16,7 @@ from Infinity.infinity.models.infinity import Infinity
 from Infinity.infinity.models.bitwise_self_correction import BitwiseSelfCorrection
 from Infinity.tools.run_infinity import load_visual_tokenizer
 # from VideoPlan.trainer.models.base_model import BaseModelConfig # prevent circular
-from config_util import instantiate_with_cfg
+from config_util import instantiate_with_cfg, _locate
 
 @dataclass
 class BaseModelConfig:
@@ -39,16 +39,30 @@ class DinoSigLipModelConfig(BaseModelConfig):
     image_sequence_len: int = 4 # TODO: other place should adjust this according to the lerobot dataset
 
 @dataclass
-class ActionHeadConfig(BaseModelConfig):
-    pass
+class QwenVlmConfig(BaseModelConfig):
+    _target_: str = "vlap.models.QwenVLM"
+    model_id: str = "qwen25-dinosiglip-224px+0_5b"
+    vlm_embed_dim: int = 128
+    vlm_hidden_layers: int = 24
+    pretrained_checkpoint: Optional[str] = "/data/czh/qwen25-dinosiglip-224px+0_5b+stage-finetune+x42/checkpoints/latest-checkpoint.pt"
 
-    
+@dataclass
+class ActionHeadConfig(BaseModelConfig):
+    _target_: str = "vlap.models.vla.ActionHead"
+    action_dim: int = 7
+    proprio_dim: int = 9
+    hidden_size: int = 128
+    num_heads: int = 8
+    dropout: float = 0.1
+    gated: bool = False
 
 @dataclass
 class VlaConfig(BaseModelConfig):
     _target_: str = "VideoPlan.trainer.models.qwen_vla_model.Vla"
+    vla_id: str = "qwen-siglip-224px-libero-spatial"
     llm_cfg: LlmModelConfig = field(default_factory=LlmModelConfig)
     dino_siglip_cfg: DinoSigLipModelConfig = field(default_factory=DinoSigLipModelConfig)
+    vlm_cfg: QwenVlmConfig = field(default_factory=QwenVlmConfig)
     action_head_cfg: ActionHeadConfig = field(default_factory=ActionHeadConfig)
 
 class Vla(nn.Module):
@@ -57,11 +71,14 @@ class Vla(nn.Module):
         
         self.llm_cfg = cfg.llm_cfg
         self.dino_siglip_cfg = cfg.dino_siglip_cfg
+        self.vlm_cfg = cfg.vlm_cfg
         self.action_head_cfg = cfg.action_head_cfg
         
+        # instantiate all models
         self.llm = instantiate(cfg=self.llm_cfg)
         self.dino_siglip = instantiate(cfg=self.dino_siglip_cfg)
-        self.action_head = instantiate(cfg=self.action_head_cfg)
+        self.vlm = _locate(self.vlm_cfg._target_)(model_id=self.vlm_cfg.model_id, llm_backbone=self.llm, vison_backbone=self.dino_siglip)
+        self.action_head = instantiate_with_cfg(cfg=self.action_head_cfg, num_layers=self.vlm_cfg.vlm_hidden_layers, llm_emb_dim=self.vlm_cfg.vlm_embed_dim)
 
     def prepare_dino_siglip_input(self, vlm_inputs):
         """
