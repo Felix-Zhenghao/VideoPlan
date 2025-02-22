@@ -10,6 +10,7 @@ from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 
 import torch
 from torch import nn
+from PIL.Image import Image as PILImage
 from hydra.utils import instantiate
 
 from Infinity.infinity.models.infinity import Infinity
@@ -60,6 +61,7 @@ class ActionHeadConfig(BaseModelConfig):
 class VlaConfig(BaseModelConfig):
     _target_: str = "VideoPlan.trainer.models.qwen_vla_model.Vla"
     vla_id: str = "qwen-siglip-224px-libero-spatial"
+    algorithm: str = "flow-matching"
     llm_cfg: LlmModelConfig = field(default_factory=LlmModelConfig)
     dino_siglip_cfg: DinoSigLipModelConfig = field(default_factory=DinoSigLipModelConfig)
     vlm_cfg: QwenVlmConfig = field(default_factory=QwenVlmConfig)
@@ -79,19 +81,26 @@ class Vla(nn.Module):
         self.dino_siglip = instantiate(cfg=self.dino_siglip_cfg)
         self.vlm = _locate(self.vlm_cfg._target_)(model_id=self.vlm_cfg.model_id, llm_backbone=self.llm, vison_backbone=self.dino_siglip)
         self.action_head = instantiate_with_cfg(cfg=self.action_head_cfg, num_layers=self.vlm_cfg.vlm_hidden_layers, llm_emb_dim=self.vlm_cfg.vlm_embed_dim)
+        
+        # some utility for image transformation
+        self.dino_siglip_image_transform = self.dino_siglip.get_image_transform()
 
-    def prepare_dino_siglip_input(self, vlm_inputs):
+    def prepare_dino_siglip_input(self, hitory_images: List[PILImage]):
         """
         Use image transformation needed for dino_siglip model to transform the image history.
+        
+        Return {"dino": torch.Tensor, "siglip": torch.Tensor}
         """
-        pass
-    
+        
+        return self.dino_siglip_image_transform(hitory_images)
+
     def tokenize_proprio_and_action(self, next_frame):
         """
         Tokenize action and proprio for action head input.
         """
             
-    def forward(self, vlm_inputs=None, next_frame=None):
+    def forward(self, llm_inputs=None, history_images=None):
+        vlm_out = None
         pass
     
     def load_pretrained_vla(self, pretrained_path: str):

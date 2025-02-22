@@ -28,6 +28,16 @@ The reason is new version of pytorch change the default setting of torch.load as
 
 The result is that if there is some code disables the autocast, then the code uses DeepSpeed for training v.s. not using DeepSpeed for training will be different.
 The main difference is that you need to cast/uncast some inputs to make sure the inputs are in lower precision because DeepSpeed uses lower precision for parameters and gradients.
+
+--------------------------------------------
+
+4. To make the code works, you need to change the vlap internal code:
+- Go to vlap.models.vision.base_vision
+- Go to funtion `compute_sequence_patches`
+- Change to line `patches = featurizer(trunc_pixels.reshape(-1, C, H, W)).reshape(B, T, -1, featurizer.embed_dim).reshape(B, -1, featurizer.embed_dim)` to `patches = featurizer(trunc_pixels.reshape(-1, C, H, W))[0].reshape(B, T, -1, featurizer.embed_dim).reshape(B, -1, featurizer.embed_dim)`
+
+The featurizer returns a list of torch.Tensor with length 1.
+If you don't do so, you will always get `list object does not have attribute reshape` error.
 """
 
 import sys
