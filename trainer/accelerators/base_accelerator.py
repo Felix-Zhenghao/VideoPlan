@@ -61,7 +61,7 @@ class BaseAcceleratorConfig:
     num_epochs: int = 10
     validate_steps: int = 100
     eval_on_start: bool = True
-    project_name: str = "infinity_125M_vlm_0_5b"
+    project_name: str = "deepspeed_test_vla"
     max_grad_norm: float = 1.0
     save_steps: int = 100
     metric_name: str = "accuracy"
@@ -73,7 +73,7 @@ class BaseAcceleratorConfig:
     
     # training stage
     stage_1_step: int = 50
-    enable_stage_1: bool = True
+    enable_stage_1: bool = False
 
 
 class BaseAccelerator(abc.ABC):

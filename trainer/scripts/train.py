@@ -42,10 +42,10 @@ If you don't do so, you will always get `list object does not have attribute res
 
 import sys
 import os
+sys.path.append(f"{os.getcwd()}/")
 sys.path.append(f"{os.getcwd()}/vlap/")
 sys.path.append(f"{os.getcwd()}/video_gen/")
 sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
-sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
 
 import json
 from typing import Any
@@ -65,10 +65,10 @@ logger = get_logger(__name__)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def load_dataloaders(cfg: DictConfig) -> Any:
+def load_dataloaders(cfg: DictConfig, dino_siglip_image_transform=None, llm_tokenizer=None) -> Any:
     dataloaders = {}
     for split in [cfg.train_split_name, cfg.valid_split_name, cfg.test_split_name]:
-        dataset = instantiate_with_cfg(cfg, split=split)
+        dataset = instantiate_with_cfg(cfg, split=split, dino_siglip_image_transform=dino_siglip_image_transform, llm_tokenizer=llm_tokenizer)
         should_shuffle = split == cfg.train_split_name
         dataloaders[split] = torch.utils.data.DataLoader(
             dataset,
@@ -116,7 +116,7 @@ def main(cfg: TrainerConfig) -> None:
     # adjust config
     dino_siglip_image_sequence_len = len(cfg.dataset.delta_timestamps["image"]) - cfg.dataset.future_img_length
     cfg.model.dino_siglip_cfg.image_sequence_len = dino_siglip_image_sequence_len
-    logger.info(f"Something has been adjusted: {cfg.model.dino_siglip_cfg.image_sequence_len=} accroding to:\n {cfg.dataset.delta_timestamps=}")
+    print(f"Something has been adjusted: {cfg.model.dino_siglip_cfg.image_sequence_len=} accroding to:\n {cfg.dataset.delta_timestamps=}")
     
     
     accelerator = instantiate_with_cfg(cfg.accelerator)
@@ -140,7 +140,7 @@ def main(cfg: TrainerConfig) -> None:
     logger.info(f"Loading lr scheduler")
     lr_scheduler = load_scheduler(cfg.lr_scheduler, optimizer)
     logger.info(f"Loading dataloaders")
-    split2dataloader, valid_episodes_length = load_dataloaders(cfg.dataset)
+    split2dataloader, valid_episodes_length = load_dataloaders(cfg.dataset, dino_siglip_image_transform = model.get_dino_siglip_image_transform(), llm_tokenizer = model.get_llm_tokenizer())
 
     dataloaders = list(split2dataloader.values())
     model, optimizer, lr_scheduler, *dataloaders = accelerator.prepare(model, optimizer, lr_scheduler, *dataloaders)
@@ -151,9 +151,6 @@ def main(cfg: TrainerConfig) -> None:
     accelerator.recalc_train_length_after_prepare(len(split2dataloader[cfg.dataset.train_split_name]))
 
     accelerator.init_training(cfg)
-    
-    if accelerator.get_latest_checkpoint() is not None:
-        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
 
     def evaluate():
         return

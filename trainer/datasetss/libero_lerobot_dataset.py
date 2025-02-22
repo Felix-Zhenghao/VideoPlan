@@ -118,7 +118,7 @@ class LiberoLerobotDataset(BaseDataset):
             {"role": "user", "content": f"{task}"},
         ] for task in task_descriptions]
         texts = self.llm_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        llm_inputs = self.llm_tokenizer(texts, return_tensors="pt", padding=True,).input_ids.to("cuda")
+        llm_inputs = self.llm_tokenizer(texts, return_tensors="pt", padding=True,).input_ids
     
         return llm_inputs
 
