@@ -204,10 +204,6 @@ class Vla(nn.Module):
         pass
 
 if __name__ == "__main__":
-    # vlm_cfg = VlmModelConfig()
-    # infinity_cfg = InfinityConfig()
-    # vae_cfg = VaeConfig()
-    # bsc_cfg = BscConfig()
     
     dataset_cfg = LiberoLerobotDatasetConfig()
     dino_siglip_image_sequence_len = len(dataset_cfg.delta_timestamps["image"]) - dataset_cfg.future_img_length
