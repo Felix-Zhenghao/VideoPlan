@@ -32,9 +32,9 @@ The main difference is that you need to cast/uncast some inputs to make sure the
 
 import sys
 import os
-sys.path.append(f"{os.getcwd()}/video_gen/")
-sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
-sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
+sys.path.append(f"{os.getcwd()}/")
+sys.path.append(f"{os.getcwd()}/VideoPlan/")
+sys.path.append(f"{os.getcwd()}/Infinity/")
 
 import json
 from typing import Any
@@ -49,6 +49,28 @@ from torch import nn
 from trainer.accelerators.base_accelerator import BaseAccelerator
 from trainer.configs.configs import TrainerConfig
 from config_util import instantiate_with_cfg
+
+
+import os
+hf_home = os.getenv("HF_HOME")
+CHECKPOINT_PATH = "/data2/czhenghao/infinity_125M/infinity_125M_VLM_0_5B_2500step.bin"
+VAE_PATH = f"{hf_home}/hub/models--FoundationVision--Infinity/snapshots/6577e6454575816928a2a8477906c84a49356b9a/infinity_vae_d16.pth"
+
+def load_visual_tokenizer():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    from infinity.models.bsq_vae.vae import vae_model
+    schedule_mode = "dynamic"
+    codebook_dim = 16
+    codebook_size = 2**codebook_dim
+    patch_size = 16
+    encoder_ch_mult=[1, 2, 4, 4, 4]
+    decoder_ch_mult=[1, 2, 4, 4, 4]
+    vae = vae_model(VAE_PATH, schedule_mode, codebook_dim, codebook_size, patch_size=patch_size, 
+                    encoder_ch_mult=encoder_ch_mult, decoder_ch_mult=decoder_ch_mult, test_mode=False).to(device)
+
+    return vae
+
 
 logger = get_logger(__name__)
 
