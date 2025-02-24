@@ -42,7 +42,7 @@ class BscConfig:
 @dataclass
 class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     _target_: str = "VideoPlan.trainer.datasetss.libero_lerobot_dataset.LiberoLerobotDataset"
-    dataset_name: str = "Felix-Zhenghao/libero"
+    dataset_name: str = "physical-intelligence/libero"
     dataset_config_name: str = "null"
 
     train_split_name: str = "train"
@@ -52,7 +52,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     
     # lerobot dataset config
     fps: int = 10
-    num_episodes: int = 400
+    num_episodes: int = 1693
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
         list(range(num_episodes))
     )
@@ -67,7 +67,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-0.3, -0.2, -0.1, 0., 0.1],
+        # "image": [-0.3, -0.2, -0.1, 0., 0.1],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
@@ -163,7 +163,9 @@ class LiberoLerobotDataset(BaseDataset):
     # TODO: check how to define the __getitem__ method
     def __getitem__(self, idx):
         example = self.dataset[idx]
-        return example
+        another_example = {}
+        another_example["image"] = example["image"]
+        return another_example
 
     def collate_fn(self, batch):
         """
@@ -184,23 +186,8 @@ class LiberoLerobotDataset(BaseDataset):
             - attention_mask
         """
         collated_batch = default_collate(batch)
-        
-        # 'collated_batch["image"]' has shape [batch_size, seq_len, 3, 256, 256]
-        full_images = collated_batch["image"]
 
-        # Split the images
-        collated_batch["image"] = full_images[:, :-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
-        collated_batch["future_img"] = full_images[:, -self.cfg.future_img_length:, ...]   # [batch_size, future_img_len, 3, 256, 256]
-        
-        collated_batch["future_img"] = collated_batch["future_img"].float().div(255/2).sub(1).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
-
-        vlm_inputs = self.process_vlm_inputs(collated_batch)
-
-        # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
-        # add vlm_inputs to example
-        collated_batch.pop(self.cfg.history_imgs_name) # free memory
-        collated_batch.pop(self.cfg.task_description_name) # free memory
-        collated_batch["vlm_inputs"] = vlm_inputs
+        collated_batch["image"] = collated_batch["image"].float().div(255/2).sub(1)
 
         return collated_batch
 

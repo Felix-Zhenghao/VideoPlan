@@ -45,11 +45,20 @@ from hydra.utils import instantiate
 from accelerate.logging import get_logger
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
+import omegaconf
+import cv2
+from dataclasses import dataclass, field
+from PIL import Image
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 from trainer.accelerators.base_accelerator import BaseAccelerator
 from trainer.configs.configs import TrainerConfig
 from config_util import instantiate_with_cfg
 
+from Infinity.infinity.models.bitwise_self_correction import *
+from trainer.datasetss import LiberoLerobotDatasetConfig
+from config_util import instantiate_with_cfg
+from trainer.models.base_model import BaseModelConfig
 
 import os
 hf_home = os.getenv("HF_HOME")
@@ -123,6 +132,35 @@ def verify_or_write_config(cfg: TrainerConfig):
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: TrainerConfig) -> None:
+    
+    
+    @dataclass
+    class VaeConfig(BaseModelConfig):
+        vae_type: int = 16
+        apply_spatial_patchify: bool = False
+        vae_path: str = VAE_PATH
+        
+    @dataclass
+    class BscConfig:
+        noise_apply_layers: int = -1
+        noise_apply_requant: bool = True
+        noise_apply_strength: float = -0.009
+        apply_spatial_patchify: bool = False
+        debug_bsc: bool = True
+
+    vae_cfg = VaeConfig()
+    vae_cfg = omegaconf.OmegaConf.create(vae_cfg)
+    model = load_visual_tokenizer().to("cuda")
+    model.train()
+    for param in model.parameters():
+        param.requires_grad = True
+
+    bsc_cfg = BscConfig()
+    bsc_cfg = omegaconf.OmegaConf.create(bsc_cfg)
+    bsc = BitwiseSelfCorrection(model, bsc_cfg)
+    
+    
+    
     accelerator = instantiate_with_cfg(cfg.accelerator)
     # accelerator.end_training()
 
@@ -133,12 +171,11 @@ def main(cfg: TrainerConfig) -> None:
     if accelerator.is_main_process:
         verify_or_write_config(cfg)
 
-    logger.info(f"Loading task")
-    task = load_task(cfg.task, accelerator)
-    logger.info(f"Loading model")
-    model = instantiate_with_cfg(cfg.model)
-    logger.info(f"Loading criterion")
-    criterion = instantiate_with_cfg(cfg.criterion)
+    # logger.info(f"Loading task")
+    # task = load_task(cfg.task, accelerator)
+
+    # logger.info(f"Loading criterion")
+    # criterion = instantiate_with_cfg(cfg.criterion)
     logger.info(f"Loading optimizer")
     optimizer = load_optimizer(cfg.optimizer, model)
     logger.info(f"Loading lr scheduler")
@@ -156,9 +193,6 @@ def main(cfg: TrainerConfig) -> None:
 
     accelerator.init_training(cfg)
     
-    if accelerator.get_latest_checkpoint() is not None:
-        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
-
     def evaluate():
         return
         model.eval()
@@ -169,12 +203,12 @@ def main(cfg: TrainerConfig) -> None:
         # accelerator.update_metrics(metrics)
         # accelerator.gradient_state.end_of_dataloader = end_of_train_dataloader
 
-    logger.info(f"task: {task.__class__.__name__}")
+
     logger.info(f"model: {model.__class__.__name__}")
     logger.info(f"num. model params: {int(sum(p.numel() for p in model.parameters()) // 1e6)}M")
     logger.info(
         f"num. model trainable params: {int(sum(p.numel() for p in model.parameters() if p.requires_grad) // 1e6)}M")
-    logger.info(f"criterion: {criterion.__class__.__name__}")
+
     logger.info(f"num. train examples: {len(split2dataloader[cfg.dataset.train_split_name].dataset)}")
     logger.info(f"num. valid examples: {len(split2dataloader[cfg.dataset.valid_split_name].dataset)}")
     logger.info(f"num. test examples: {len(split2dataloader[cfg.dataset.test_split_name].dataset)}")
@@ -202,15 +236,11 @@ def main(cfg: TrainerConfig) -> None:
             if accelerator.should_save():
                 accelerator.save_checkpoint()
 
-            if (accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2) or (not accelerator.cfg.enable_stage_1 and not accelerator.has_changed_to_stage_2):
-                model.get_into_training_stage_2()
-                accelerator.has_changed_to_stage_2 = True
-            elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
-                model.get_into_training_stage_1()
-                accelerator.has_changed_to_stage_1 = True
-
             with accelerator.accumulate(model):
-                loss = task.train_step(model, criterion, batch)
+                image = batch["image"].to("cuda")
+                raw_features, _, _ = model.encode_for_raw_features(image, scale_schedule=[(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)])
+                _, _, _, loss = bsc.flip_requant([(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)], image, raw_features, "cuda", save_path = f"/data2/czhenghao/infinity_125M/vae_check1/{id}.jpg", should_save=False)
+                
                 avg_loss = accelerator.gather(loss).mean().item()
 
                 accelerator.backward(loss)
