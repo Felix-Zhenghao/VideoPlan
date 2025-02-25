@@ -133,34 +133,6 @@ def verify_or_write_config(cfg: TrainerConfig):
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: TrainerConfig) -> None:
     
-    
-    @dataclass
-    class VaeConfig(BaseModelConfig):
-        vae_type: int = 16
-        apply_spatial_patchify: bool = False
-        vae_path: str = VAE_PATH
-        
-    @dataclass
-    class BscConfig:
-        noise_apply_layers: int = -1
-        noise_apply_requant: bool = True
-        noise_apply_strength: float = -0.009
-        apply_spatial_patchify: bool = False
-        debug_bsc: bool = True
-
-    vae_cfg = VaeConfig()
-    vae_cfg = omegaconf.OmegaConf.create(vae_cfg)
-    model = load_visual_tokenizer().to("cuda")
-    model.train()
-    for param in model.parameters():
-        param.requires_grad = True
-
-    bsc_cfg = BscConfig()
-    bsc_cfg = omegaconf.OmegaConf.create(bsc_cfg)
-    bsc = BitwiseSelfCorrection(model, bsc_cfg)
-    
-    
-    
     accelerator = instantiate_with_cfg(cfg.accelerator)
     # accelerator.end_training()
 
@@ -171,11 +143,12 @@ def main(cfg: TrainerConfig) -> None:
     if accelerator.is_main_process:
         verify_or_write_config(cfg)
 
-    # logger.info(f"Loading task")
-    # task = load_task(cfg.task, accelerator)
-
-    # logger.info(f"Loading criterion")
-    # criterion = instantiate_with_cfg(cfg.criterion)
+    logger.info(f"Loading task")
+    task = load_task(cfg.task, accelerator)
+    logger.info(f"Loading model")
+    model = instantiate_with_cfg(cfg.model)
+    logger.info(f"Loading criterion")
+    criterion = instantiate_with_cfg(cfg.criterion)
     logger.info(f"Loading optimizer")
     optimizer = load_optimizer(cfg.optimizer, model)
     logger.info(f"Loading lr scheduler")
@@ -194,11 +167,13 @@ def main(cfg: TrainerConfig) -> None:
     accelerator.init_training(cfg)
     
     def evaluate():
-        return
         model.eval()
         end_of_train_dataloader = accelerator.gradient_state.end_of_dataloader
         logger.info(f"*** Evaluating {cfg.dataset.valid_split_name} ***")
-        task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name], accelerator.cfg.save_dir, valid_episodes_length)
+        for batch in split2dataloader[cfg.dataset.valid_split_name]:
+            with torch.no_grad():
+                task.train_step(model, criterion, batch, should_save=True)
+        # task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name], accelerator.cfg.save_dir, valid_episodes_length)
         # metrics = task.evaluate(model, criterion, split2dataloader[cfg.dataset.valid_split_name])
         # accelerator.update_metrics(metrics)
         # accelerator.gradient_state.end_of_dataloader = end_of_train_dataloader
@@ -235,12 +210,11 @@ def main(cfg: TrainerConfig) -> None:
 
             if accelerator.should_save():
                 accelerator.save_checkpoint()
+                if accelerator.is_main_process:
+                    torch.save(model.module.state_dict(), f"/data2/czhenghao/infinity_125M/vae_checkpointing/{accelerator.global_step}.pt")
 
             with accelerator.accumulate(model):
-                image = batch["image"].to("cuda")
-                raw_features, _, _ = model.encode_for_raw_features(image, scale_schedule=[(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)])
-                _, _, _, loss = bsc.flip_requant([(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)], image, raw_features, "cuda", save_path = f"/data2/czhenghao/infinity_125M/vae_check1/{id}.jpg", should_save=False)
-                
+                loss = task.train_step(model, criterion, batch)
                 avg_loss = accelerator.gather(loss).mean().item()
 
                 accelerator.backward(loss)

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 
 import torch
+import random
 from torch import nn
 from hydra.utils import instantiate
 
@@ -29,17 +30,17 @@ class VlmModelConfig(BaseModelConfig):
     
 @dataclass
 class BscConfig:
-    noise_apply_layers: int = 13
+    noise_apply_layers: int = -1
     noise_apply_requant: bool = True
-    noise_apply_strength: float = 0.3
+    noise_apply_strength: float = 0.0
     apply_spatial_patchify: bool = False
-    debug_bsc: bool = False
+    debug_bsc: bool = True
     
 @dataclass
 class VaeConfig(BaseModelConfig):
     vae_type: int = 16
     apply_spatial_patchify: bool = False
-    vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
+    vae_path: str = "/data2/czhenghao/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/6577e6454575816928a2a8477906c84a49356b9a/infinity_vae_d16.pth"
 
     
 @dataclass
@@ -121,116 +122,20 @@ class InfinityVlmModel(nn.Module):
         self.bsc_cfg: BscConfig = cfg.bsc_cfg
         
         self.vae = load_visual_tokenizer(self.vae_cfg).to("cuda")
-        
-        self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae).to("cuda")
         self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
-        self.vlm = instantiate(self.vlm_cfg).to("cuda")
-
-    def prepare_condition_input(self, vlm_inputs):
-        for k, v in vlm_inputs.items():
-            vlm_inputs[k] = v.to("cuda")
-        v_of_last_layer = self.vlm.generate(**vlm_inputs, max_new_tokens=200, do_sample=False, return_dict_in_generate=True)["past_key_values"][-1][1]
-        v_of_last_layer = v_of_last_layer.reshape(v_of_last_layer.shape[0], v_of_last_layer.shape[2], -1) # turn from (b,h,len,dim) -> (b,len,h*dim)
         
-        bsz = v_of_last_layer.shape[0]
-        lens: List[int] = [v_of_last_layer.shape[1]] * bsz
-        max_len: int = max(lens)
-        cu_seqlens_k = torch.arange(0, bsz+1) * max_len
-        cu_seqlens_k = cu_seqlens_k.to(torch.int32)
-        
-        v_of_last_layer = v_of_last_layer.reshape(-1, v_of_last_layer.shape[-1])
-        
-        return (v_of_last_layer, lens, cu_seqlens_k.to("cuda"), max_len)
-    
-    def tokenize_image_with_vae(self, next_frame):
-        if self.vae_cfg.apply_spatial_patchify:
-            vae_scale_schedule = [(pt, 2*ph, 2*pw) for pt, ph, pw in self.infinity_cfg.scale_schedule]
-        else:
-            vae_scale_schedule = [(pt, ph, pw) for pt, ph, pw in self.infinity_cfg.scale_schedule]
-            
-        raw_features, _, _ = self.vae.encode_for_raw_features(next_frame, scale_schedule=vae_scale_schedule)
-        x_BLC_wo_prefix, gt_ms_idx_Bl = self.bitwise_self_correction.flip_requant(vae_scale_schedule, next_frame, raw_features, "cuda") # x_BLC_wo_prefix: torch.Size([bs, 2*2+3*3+...+64*64, d or 4d])
-        
-        return x_BLC_wo_prefix, gt_ms_idx_Bl
-            
-    def forward(self, vlm_inputs=None, next_frame=None):
-        v_of_last_layer, lens, cu_seqlens_k, max_len = self.prepare_condition_input(vlm_inputs) # torch.bfloat16, ...
-        x_BLC_wo_prefix, gt_ms_idx_Bl = self.tokenize_image_with_vae(next_frame.to("cuda")) # troch.float32, List[torch.int32]
-        
-        # print(f"🚀🚀🚀🚀🚀🚀🚀 {v_of_last_layer.dtype=}, {x_BLC_wo_prefix.dtype=}")
-                
-        # remember 1. not to convert v_of_last_layer to float, and 2. add to("cuda") after cu_seqlens_k, and 3. not to convert x_BLC_wo_prefix to float
-        logits_BLV = self.infinity(
-            label_B_or_BLT=(v_of_last_layer, lens, cu_seqlens_k.to("cuda"), max_len),
-            x_BLC_wo_prefix=x_BLC_wo_prefix,
-            scale_schedule=[(pt, ph, pw) for pt, ph, pw in self.infinity_cfg.scale_schedule],
-            cfg_infer=False,
-        )
-
-        return logits_BLV, gt_ms_idx_Bl
-    
-    def load_pretrained_infinity(self, pretrained_path: str):
-        self.infinity.load_state_dict(torch.load(pretrained_path))
-
-    def get_into_training_stage_1(self,):
-        """
-        Training stage 1:
-        - vae: freezed
-        - vlm: freezed
-        - infinity: mostly freezed except for:
-        ```
-            - (vlm_to_kv_compact): Sequential(
-                (0): Linear(in_features=128, out_features=2048, bias=True)
-                (1): GELU(approximate='tanh')
-                (2): Linear(in_features=2048, out_features=2048, bias=True)
-            )
-            - (cfg_uncond)
-        ```
-        """
-        self.vae.eval()
-        self.vlm.eval()
-        self.infinity.train()
+        self.vae.train()
         for param in self.vae.parameters():
-            param.requires_grad = False
-        for param in self.vlm.parameters():
-            param.requires_grad = False
-        for name, param in self.infinity.named_parameters():
-            if "vlm_to_kv_compact" in name or "cfg_uncond" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-        
-        print("\n\n==========================================================================")
-        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only linear prob part trainable)\n")
-        print(f"num. infinity trainable params: {int(sum(p.numel() for p in self.infinity.parameters() if p.requires_grad) // 1e6)}M")
-        print(f"num. VAE trainable params: {int(sum(p.numel() for p in self.vae.parameters() if p.requires_grad) // 1e6)}M")
-        print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
-        print("==========================================================================\n\n")
-                
-    def get_into_training_stage_2(self,):
-        """
-        Training stage 2:
-        - vae: freezed
-        - vlm: trainable
-        - infinity: trainable
-        """
-        self.vae.eval()
-        self.vlm.train()
-        self.infinity.train()
-        for param in self.vae.parameters():
-            param.requires_grad = False
-        for param in self.vlm.parameters():
-            param.requires_grad = True
-        for param in self.infinity.parameters():
             param.requires_grad = True
 
-        print("\n\n==========================================================================")
-        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 2 (whole vlm and infinity trainable)\n")
-        print(f"num. infinity trainable params: {int(sum(p.numel() for p in self.infinity.parameters() if p.requires_grad) // 1e6)}M")
-        print(f"num. VAE trainable params: {int(sum(p.numel() for p in self.vae.parameters() if p.requires_grad) // 1e6)}M")
-        print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
-        print("==========================================================================\n\n")
-    
+    def forward(self, batch, should_save=False):
+        
+        image = batch["image"].to("cuda")
+        raw_features, _, _ = self.vae.encode_for_raw_features(image, scale_schedule=[(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)])
+        _, _, _, loss = self.bitwise_self_correction.flip_requant([(1, 1, 1), (1, 2, 2), (1, 4, 4), (1, 6, 6), (1, 8, 8), (1, 12, 12), (1, 16, 16)], image, raw_features, "cuda", save_path = f"/data2/czhenghao/infinity_125M/vae_check_finetuned/{random.randint(0,100000)}.jpg", should_save=should_save)
+
+        return loss
+
     @property
     def logit_scale(self):
         pass

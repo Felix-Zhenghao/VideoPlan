@@ -47,8 +47,8 @@ class InfinityVlmTask(BaseTask):
         # self.tokenizer = AutoTokenizer.from_pretrained(cfg.pretrained_model_name_or_path)
         self.cfg = cfg
 
-    def train_step(self, model, criterion, batch):
-        loss = criterion(model, batch)
+    def train_step(self, model, criterion, batch, should_save=False):
+        loss = criterion(model, batch, should_save=should_save)
         return loss
     
     @staticmethod

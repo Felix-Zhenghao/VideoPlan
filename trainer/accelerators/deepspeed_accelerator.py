@@ -39,9 +39,9 @@ class DeepSpeedConfig:
     scheduler: dict = field(default_factory=lambda: {
         "type": "WarmupLR",
         "params": {
-            "warmup_min_lr": 5e-7,
-            "warmup_max_lr": 1.5e-5,
-            "warmup_num_steps": 1000,
+            "warmup_min_lr": 1.5e-5,
+            "warmup_max_lr": 2.5e-5,
+            "warmup_num_steps": 10,
         }
     })
     zero_optimization: dict = field(default_factory=lambda: {
@@ -53,7 +53,7 @@ class DeepSpeedConfig:
         "reduce_bucket_size": 500000000,
         "contiguous_gradients": True
     })
-    gradient_accumulation_steps: int = 10
+    gradient_accumulation_steps: int = 20
     gradient_clipping: float = 1.0
     steps_per_print: int = 1
     train_batch_size: str = "auto"

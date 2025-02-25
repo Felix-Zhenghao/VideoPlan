@@ -52,21 +52,21 @@ class BaseAcceleratorConfig:
     output_dir: str = II("output_dir")
     save_dir: str = "test_video_gen_125M_0_5B"
     mixed_precision: PrecisionType = PrecisionType.NO
-    gradient_accumulation_steps: int = 10
+    gradient_accumulation_steps: int = 20
     log_with: Optional[LoggerType] = LoggerType.WANDB
     debug: DebugConfig = field(default_factory=lambda: DebugConfig())
     seed: int = 42
     resume_from_checkpoint: bool = True
     max_steps: int = 100000000
-    num_epochs: int = 500
-    validate_steps: int = 100
+    num_epochs: int = 20
+    validate_steps: int = 101
     eval_on_start: bool = True
     project_name: str = "infinity_vae_16_finetune"
     max_grad_norm: float = 1.0
-    save_steps: int = 200
+    save_steps: int = 100
     metric_name: str = "accuracy"
     metric_mode: MetricMode = MetricMode.MAX
-    limit_num_checkpoints: int = 30
+    limit_num_checkpoints: int = 3
     save_only_if_best: bool = False
     dynamo_backend: DynamoBackend = DynamoBackend.NO
     keep_best_ckpts: bool = False
