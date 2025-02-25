@@ -11,6 +11,7 @@ from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 import torch
 from torch import nn
 from hydra.utils import instantiate
+from transformers import GemmaForCausalLM
 
 from Infinity.infinity.models.infinity import Infinity
 from Infinity.infinity.models.bitwise_self_correction import BitwiseSelfCorrection
@@ -41,6 +42,32 @@ class VaeConfig(BaseModelConfig):
     apply_spatial_patchify: bool = False
     vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
 
+@dataclass
+class ActionHeadConfig: # 255M (0.255B) params
+    _target_: str = "transformers.GemmaConfig"
+    architectures: List[str] = field(default_factory=lambda: ["GemmaForCausalLM"])
+    attention_bias: bool = False
+    attention_dropout: float = 0.0
+    bos_token_id: int = 2
+    eos_token_id: int = 1
+    head_dim: int = 64 # changed to 64
+    hidden_act: str = "gelu"
+    hidden_size: int = 896 # changed to 896 = 64 * 14
+    initializer_range: float = 0.02
+    intermediate_size: int = 7168 # changed to 7168 = 896 * 8, mlp_ratio=8
+    max_position_embeddings: int = 8192
+    model_type: str = "gemma"
+    num_attention_heads: int = 14 # changed to 14, same as Qwen
+    num_hidden_layers: int = 12 # changed to 12, half of Qwen
+    num_key_value_heads: int = 2 # changed to 2, same as Qwen
+    pad_token_id: int = 0 # will not use pad token id, so just default value
+    rms_norm_eps: float = 1e-6
+    rope_scaling: Optional[float] = None
+    rope_theta: float = 10000.0
+    torch_dtype: str = "bfloat16"
+    transformers_version: str = "4.38.0.dev0"
+    use_cache: bool = True
+    vocab_size: int = 2048 # vocab size of FAST tokenizer
     
 @dataclass
 class InfinityConfig(BaseModelConfig):
@@ -95,13 +122,16 @@ class InfinityConfig(BaseModelConfig):
     d_vlm: int = 128
 
 @dataclass
-class InfinityVlmConfig(BaseModelConfig):
-    _target_: str = "VideoPlan.trainer.models.infinity_model.InfinityVlmModel"
+class InfinityVlaConfig(BaseModelConfig):
+    _target_: str = "VideoPlan.trainer.models.infinity_model.InfinityVlaModel"
     vlm_cfg: VlmModelConfig = field(default_factory=lambda:
         VlmModelConfig()
     )
     infinity_cfg: InfinityConfig = field(default_factory=lambda:
         InfinityConfig()
+    )
+    action_head_cfg: ActionHeadConfig = field(default_factory=lambda:
+        ActionHeadConfig()
     )
     vae_cfg: VaeConfig = field(default_factory=lambda:
         VaeConfig()
@@ -111,20 +141,23 @@ class InfinityVlmConfig(BaseModelConfig):
     )
     
 
-class InfinityVlmModel(nn.Module):
-    def __init__(self, cfg: InfinityVlmConfig):
+class InfinityVlaModel(nn.Module):
+    def __init__(self, cfg: InfinityVlaConfig):
         super().__init__()
         
         self.vae_cfg: VaeConfig = cfg.vae_cfg
         self.infinity_cfg: InfinityConfig = cfg.infinity_cfg
         self.vlm_cfg: VlmModelConfig = cfg.vlm_cfg
         self.bsc_cfg: BscConfig = cfg.bsc_cfg
+        self.action_head_cfg = instantiate(cfg.action_head_cfg)
         
-        self.vae = load_visual_tokenizer(self.vae_cfg).to("cuda")
+        self.vae = load_visual_tokenizer(self.vae_cfg)
         
-        self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae).to("cuda")
+        self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae)
         self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
-        self.vlm = instantiate(self.vlm_cfg).to("cuda")
+        self.vlm = instantiate(self.vlm_cfg)
+        
+        self.action_head = GemmaForCausalLM(self.action_head_cfg)
 
     def prepare_condition_input(self, vlm_inputs):
         for k, v in vlm_inputs.items():
@@ -244,7 +277,7 @@ if __name__ == "__main__":
     # vae_cfg = VaeConfig()
     # bsc_cfg = BscConfig()
     
-    cfg = InfinityVlmConfig()
+    cfg = InfinityVlaConfig()
     # use omegacfg to deal with all cfgs in cfg
     import omegaconf
     cfg = omegaconf.OmegaConf.create(cfg)
