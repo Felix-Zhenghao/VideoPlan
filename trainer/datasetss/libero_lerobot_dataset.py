@@ -67,7 +67,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-0.3, -0.2, -0.1, 0., 0.1],
+        "image": [-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
@@ -192,7 +192,7 @@ class LiberoLerobotDataset(BaseDataset):
         collated_batch["image"] = full_images[:, :-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
         collated_batch["future_img"] = full_images[:, -self.cfg.future_img_length:, ...]   # [batch_size, future_img_len, 3, 256, 256]
         
-        collated_batch["future_img"] = collated_batch["future_img"].float().div(255).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
+        collated_batch["future_img"] = collated_batch["future_img"].float().div(255/2).sub(1).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255/2).sub(1).view(-1, 3, 256, 256)
 
         vlm_inputs = self.process_vlm_inputs(collated_batch)
 

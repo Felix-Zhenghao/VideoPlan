@@ -31,7 +31,7 @@ class VlmModelConfig(BaseModelConfig):
 class BscConfig:
     noise_apply_layers: int = 13
     noise_apply_requant: bool = True
-    noise_apply_strength: float = 0.1
+    noise_apply_strength: float = 0.3
     apply_spatial_patchify: bool = False
     debug_bsc: bool = False
     
@@ -39,7 +39,7 @@ class BscConfig:
 class VaeConfig(BaseModelConfig):
     vae_type: int = 16
     apply_spatial_patchify: bool = False
-    vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
+    vae_path: str = "/home/czh/.cache/huggingface/hub/models--Felix-Zhenghao--infinity_125M_0_5B_VLM/snapshots/569769515ac679871318ffafd0e578ed0d75bef0/8000.pt"
 
     
 @dataclass
@@ -49,7 +49,7 @@ class InfinityConfig(BaseModelConfig):
     """
     # _target_: str = "Infinity.infinity.models.infinity.Infinity"
     text_channels: int = 2048
-    text_maxlen: int = 1050 # NOTE: should change this whenever change the history image num
+    text_maxlen: int = 1500 # NOTE: should change this whenever change the history image num
     embed_dim: int = 768
     depth: int = 12
     num_heads: int = 8

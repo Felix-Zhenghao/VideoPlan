@@ -41,7 +41,7 @@ class DeepSpeedConfig:
         "params": {
             "warmup_min_lr": "auto",
             "warmup_max_lr": 2e-5,
-            "warmup_num_steps": "auto",
+            "warmup_num_steps": 300,
         }
     })
     zero_optimization: dict = field(default_factory=lambda: {
@@ -53,7 +53,7 @@ class DeepSpeedConfig:
         "reduce_bucket_size": 500000000,
         "contiguous_gradients": True
     })
-    gradient_accumulation_steps: int = 1
+    gradient_accumulation_steps: int = 2
     gradient_clipping: float = 1.0
     steps_per_print: int = 1
     train_batch_size: str = "auto"
