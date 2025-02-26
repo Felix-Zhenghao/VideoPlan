@@ -11,7 +11,7 @@ from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 import torch
 from torch import nn
 from hydra.utils import instantiate
-from transformers import GemmaForCausalLM
+from transformers import Gemma2ForCausalLM
 
 from Infinity.infinity.models.infinity import Infinity
 from Infinity.infinity.models.bitwise_self_correction import BitwiseSelfCorrection
@@ -43,31 +43,37 @@ class VaeConfig(BaseModelConfig):
     vae_path: str = "/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_vae_d16.pth"
 
 @dataclass
-class ActionHeadConfig: # 255M (0.255B) params
-    _target_: str = "transformers.GemmaConfig"
-    architectures: List[str] = field(default_factory=lambda: ["GemmaForCausalLM"])
+class ActionHeadConfig:
+    _target_: str = "transformers.Gemma2Config"
+    architectures: List[str] = field(default_factory=lambda: ["Gemma2ForCausalLM"])
     attention_bias: bool = False
     attention_dropout: float = 0.0
-    bos_token_id: int = 2
-    eos_token_id: int = 1
-    head_dim: int = 64 # changed to 64
-    hidden_act: str = "gelu"
-    hidden_size: int = 896 # changed to 896 = 64 * 14
+    attn_logit_softcapping: float = 50.0
+    bos_token_id: int = 2049 # NOTE
+    cache_implementation: str = "hybrid"
+    eos_token_id: int = 2048 # NOTE
+    final_logit_softcapping: float = 30.0
+    head_dim: int = 64 # NOTE
+    hidden_act: str = "gelu_pytorch_tanh"
+    hidden_activation: str = "gelu_pytorch_tanh"
+    hidden_size: int = 896 # NOTE
     initializer_range: float = 0.02
-    intermediate_size: int = 7168 # changed to 7168 = 896 * 8, mlp_ratio=8
+    intermediate_size: int = 7168 # NOTE
     max_position_embeddings: int = 8192
-    model_type: str = "gemma"
-    num_attention_heads: int = 14 # changed to 14, same as Qwen
-    num_hidden_layers: int = 12 # changed to 12, half of Qwen
-    num_key_value_heads: int = 2 # changed to 2, same as Qwen
-    pad_token_id: int = 0 # will not use pad token id, so just default value
-    rms_norm_eps: float = 1e-6
-    rope_scaling: Optional[float] = None
+    model_type: str = "gemma2"
+    num_attention_heads: int = 14 # NOTE
+    num_hidden_layers: int = 12 # TODO: make it compatible with Qwen with only 12 hidden layers
+    num_key_value_heads: int = 2 # NOTE
+    pad_token_id: int = 2048 # NOTE
+    query_pre_attn_scalar: int = 256
+    rms_norm_eps: float = 1e-06
     rope_theta: float = 10000.0
-    torch_dtype: str = "bfloat16"
-    transformers_version: str = "4.38.0.dev0"
+    sliding_window: int = 4096
+    torch_dtype: str = "float32"
+    transformers_version: str = "4.42.4"
     use_cache: bool = True
-    vocab_size: int = 2048 # vocab size of FAST tokenizer
+    vocab_size: int = 2050 # NOTE
+    _attn_implementation: str = "eager"
     
 @dataclass
 class InfinityConfig(BaseModelConfig):
@@ -124,6 +130,9 @@ class InfinityConfig(BaseModelConfig):
 @dataclass
 class InfinityVlaConfig(BaseModelConfig):
     _target_: str = "VideoPlan.trainer.models.infinity_model.InfinityVlaModel"
+    layer_id_of_vlm_kv_used: List[int] = field(default_factory=lambda: 
+        [1,3,5,7,9,11,13,15,17,19,21,23]
+    )
     vlm_cfg: VlmModelConfig = field(default_factory=lambda:
         VlmModelConfig()
     )
@@ -157,7 +166,7 @@ class InfinityVlaModel(nn.Module):
         self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
         self.vlm = instantiate(self.vlm_cfg)
         
-        self.action_head = GemmaForCausalLM(self.action_head_cfg)
+        self.action_head = Gemma2ForCausalLM(self.action_head_cfg)
 
     def prepare_condition_input(self, vlm_inputs):
         for k, v in vlm_inputs.items():

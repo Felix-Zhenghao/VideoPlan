@@ -14,6 +14,8 @@ from accelerate.logging import get_logger
 from datasets import Dataset
 from hydra.utils import instantiate
 from omegaconf import II
+from torch.nn.utils.rnn import pad_sequence
+
 
 from VideoPlan.trainer.datasetss.base_dataset import BaseDataset, BaseDatasetConfig
 
@@ -38,6 +40,46 @@ class BscConfig:
     apply_spatial_patchify=False
     debug_bsc=False
 
+@dataclass
+class ActionTokenizer:
+    _target_: str = "transformers.AutoProcessor.from_pretrained"
+    pretrained_model_name_or_path: str = "physical-intelligence/fast"
+    trust_remote_code: bool = True
+
+@dataclass
+class PadActionTokensForAutoregressiveInput:
+    bos_token_id: int = 2049
+    pad_token_id: int = 2048
+    padding_side: str = "right"
+    ignore_index: int = -100
+    
+    def __call__(self, action_tokens: List[List[int]]) -> torch.Tensor:
+        action_tokens = [torch.tensor(action) for action in action_tokens]
+
+        # For now, we only support Tokenizers with `padding_side = "right"` during Training (but plan to extend!)
+        #   => Handle padding via RNN Utils => `pad_sequence`
+        action_tokens = pad_sequence(action_tokens, batch_first=True, padding_value=self.pad_token_id)
+        
+        # create autoregressive labels, if the label is pad_token_id, make it ignore_index
+        labels = action_tokens.clone()
+        labels = pad_sequence(action_tokens, batch_first=True, padding_value=self.ignore_index)
+        
+        # at the beginning of the sequence, add bos_token_id
+        action_tokens = torch.cat([
+            torch.full((action_tokens.shape[0], 1), self.bos_token_id, dtype=action_tokens.dtype),
+            action_tokens,
+            torch.full((action_tokens.shape[0], 1), self.pad_token_id, dtype=action_tokens.dtype)
+        ],dim=1)
+        
+        # only keep the first padding token as eos, ignore the rest
+        eos_mask = (action_tokens == self.pad_token_id)
+        eos_cumsum = eos_mask.cumsum(dim=1)
+        eos_mask = eos_mask & (eos_cumsum > 1)
+        labels = action_tokens.clone()
+        labels[eos_mask] = self.ignore_index
+        
+        return action_tokens, labels
+    
 
 @dataclass
 class LiberoLerobotDatasetConfig(BaseDatasetConfig):
@@ -89,6 +131,12 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         VlmProcessorConfig()
     )
     bsc: Optional[BscConfig] = None
+    action_tokenizer: ActionTokenizer = field(default_factory=lambda:
+        ActionTokenizer()
+    )
+    pad_action_tokens_for_autoregressive_input: PadActionTokensForAutoregressiveInput = field(default_factory=lambda:
+        PadActionTokensForAutoregressiveInput()
+    )
 
 
 class LiberoLerobotDataset(BaseDataset):
@@ -96,13 +144,11 @@ class LiberoLerobotDataset(BaseDataset):
     def __init__(self, cfg: LiberoLerobotDatasetConfig, split: str = "train"):
         self.cfg = cfg
         self.split = split
-        # logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Loading {self.split} dataset")
 
         self.dataset = self.load_hf_dataset(self.split)
-        # logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Loaded {len(self.dataset)} examples from {self.split} dataset")
-
         self.vlm_processor = instantiate(cfg.vlm_processor)
-        # logger.info(f"🚀🚀🚀🚀🚀🚀🚀 Loaded VLM processor")
+        self.action_tokenizer = instantiate(cfg.action_tokenizer)
+        self.pad_action_tokens_for_autoregressive_input = cfg.pad_action_tokens_for_autoregressive_input
 
     def load_hf_dataset(self, split: str) -> Dataset:
         if split == self.cfg.train_split_name:
@@ -159,6 +205,11 @@ class LiberoLerobotDataset(BaseDataset):
         x_BLC_wo_prefix, gt_ms_idx_Bl = bitwise_self_correction.flip_requant(vae_scale_schedule, future_img, raw_features, "cuda") # x_BLC_wo_prefix: torch.Size([bs, 2*2+3*3+...+64*64, d or 4d])
 
         return x_BLC_wo_prefix, gt_ms_idx_Bl
+    
+    def process_action_inputs(self, actions):
+        action_tokens = self.action_tokenizer(actions)
+        action_tokens, action_labels = self.pad_action_tokens_for_autoregressive_input(action_tokens)
+        return action_tokens, action_labels
 
     # TODO: check how to define the __getitem__ method
     def __getitem__(self, idx):
@@ -170,7 +221,6 @@ class LiberoLerobotDataset(BaseDataset):
         Returned keys:
         - wrist_image
         - state
-        - actions
         - timestamp
         - frame_index
         - episode_index
@@ -178,6 +228,8 @@ class LiberoLerobotDataset(BaseDataset):
         - task_index
         - image_is_pad
         - future_img
+        - action_tokens
+        - action_labels
         - vlm_inputs
             - input_ids
             - pixel_values_videos
@@ -195,12 +247,17 @@ class LiberoLerobotDataset(BaseDataset):
         collated_batch["future_img"] = collated_batch["future_img"].float().div(255).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
 
         vlm_inputs = self.process_vlm_inputs(collated_batch)
+        
+        action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
 
         # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
         # add vlm_inputs to example
+        collated_batch.pop("actions")
         collated_batch.pop(self.cfg.history_imgs_name) # free memory
         collated_batch.pop(self.cfg.task_description_name) # free memory
         collated_batch["vlm_inputs"] = vlm_inputs
+        collated_batch["action_tokens"] = action_tokens
+        collated_batch["action_labels"] = action_labels
 
         return collated_batch
 
@@ -209,7 +266,19 @@ class LiberoLerobotDataset(BaseDataset):
 
 
 if __name__ == "__main__":
+    """
+    Unit Test for dataset loading
+    """
+    
     cfg = LiberoLerobotDatasetConfig()
-    dataset = LiberoLerobotDataset(cfg, split="train")
-    print(len(dataset))
-    print(dataset[0])
+    dataset = LiberoLerobotDataset(cfg, split="validation_unique")
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=4,
+        num_workers=0,
+        collate_fn=dataset.collate_fn,
+    )
+    
+    for batch in dataloader:
+        import IPython; IPython.embed()
+        break
