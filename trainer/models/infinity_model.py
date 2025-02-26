@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from hydra.utils import instantiate
 from transformers import Gemma2ForCausalLM
+from transformers.cache_utils import HybridCache
 
 from Infinity.infinity.models.infinity import Infinity
 from Infinity.infinity.models.bitwise_self_correction import BitwiseSelfCorrection
@@ -58,7 +59,7 @@ class ActionHeadConfig:
     hidden_activation: str = "gelu_pytorch_tanh"
     hidden_size: int = 896 # NOTE
     initializer_range: float = 0.02
-    intermediate_size: int = 7168 # NOTE
+    intermediate_size: int = 3584 # NOTE: mlp_ratio = 4
     max_position_embeddings: int = 8192
     model_type: str = "gemma2"
     num_attention_heads: int = 14 # NOTE
@@ -69,12 +70,17 @@ class ActionHeadConfig:
     rms_norm_eps: float = 1e-06
     rope_theta: float = 10000.0
     sliding_window: int = 4096
-    torch_dtype: str = "float32"
+    torch_dtype: str = "bfloat16" # NOTE
     transformers_version: str = "4.42.4"
     use_cache: bool = True
     vocab_size: int = 2050 # NOTE
     _attn_implementation: str = "eager"
     
+@dataclass
+class VlaHybridCacheConfig:
+    max_extra_tokens: int = 25
+    device: str = "cuda"
+
 @dataclass
 class InfinityConfig(BaseModelConfig):
     """
@@ -128,8 +134,8 @@ class InfinityConfig(BaseModelConfig):
     d_vlm: int = 128
 
 @dataclass
-class InfinityVlaConfig(BaseModelConfig):
-    _target_: str = "VideoPlan.trainer.models.infinity_model.InfinityVlaModel"
+class QwenVlmInfinityHeadGemmaActionHeadConfig(BaseModelConfig):
+    _target_: str = "VideoPlan.trainer.models.infinity_model.QwenVlmInfinityHeadGemmaActionHeadBase"
     layer_id_of_vlm_kv_used: List[int] = field(default_factory=lambda: 
         [1,3,5,7,9,11,13,15,17,19,21,23]
     )
@@ -138,6 +144,9 @@ class InfinityVlaConfig(BaseModelConfig):
     )
     infinity_cfg: InfinityConfig = field(default_factory=lambda:
         InfinityConfig()
+    )
+    hybrid_cache_cfg: VlaHybridCacheConfig = field(default_factory=lambda:
+        VlaHybridCacheConfig()
     )
     action_head_cfg: ActionHeadConfig = field(default_factory=lambda:
         ActionHeadConfig()
@@ -148,10 +157,21 @@ class InfinityVlaConfig(BaseModelConfig):
     bsc_cfg: BscConfig = field(default_factory=lambda:
         BscConfig()
     )
-    
 
-class InfinityVlaModel(nn.Module):
-    def __init__(self, cfg: InfinityVlaConfig):
+
+@dataclass
+class QwenVlmInfinityConfig(QwenVlmInfinityHeadGemmaActionHeadConfig):
+    _target_: str = "VideoPlan.trainer.models.infinity_model.QwenVlmInfinityHead"
+
+
+@dataclass
+class QwenVlmGemmaActionHeadConfig(QwenVlmInfinityHeadGemmaActionHeadConfig):
+    _target_: str = "VideoPlan.trainer.models.infinity_model.QwenVlmGemmaActionHead"
+
+
+
+class QwenVlmInfinityHeadGemmaActionHeadBase(nn.Module):
+    def __init__(self, cfg: QwenVlmInfinityHeadGemmaActionHeadConfig):
         super().__init__()
         
         self.vae_cfg: VaeConfig = cfg.vae_cfg
@@ -159,16 +179,44 @@ class InfinityVlaModel(nn.Module):
         self.vlm_cfg: VlmModelConfig = cfg.vlm_cfg
         self.bsc_cfg: BscConfig = cfg.bsc_cfg
         self.action_head_cfg = instantiate(cfg.action_head_cfg)
+        self.hybrid_cache_cfg = cfg.hybrid_cache_cfg
+        self.layer_id_of_vlm_kv_used = cfg.layer_id_of_vlm_kv_used
         
-        self.vae = load_visual_tokenizer(self.vae_cfg)
+        # only instantiate vlm when initialize the model
+        # TODO: modify training stages to add model loading logics
+        self.vlm = instantiate(self.vlm_cfg).to("cuda", non_blocking=True)
+        self.training_stage = 0
         
-        self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae)
-        self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
-        self.vlm = instantiate(self.vlm_cfg)
-        
-        self.action_head = Gemma2ForCausalLM(self.action_head_cfg)
+        self.vae, self.infinity, self.bitwise_self_correction, self.action_head = None, None, None, None
 
-    def prepare_condition_input(self, vlm_inputs):
+    def load_infinity(self):
+
+        if self.vae is None and self.infinity is None and self.bitwise_self_correction is None:
+            self.vae = load_visual_tokenizer(self.vae_cfg).to("cuda", non_blocking=True)
+            self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae).to("cuda", non_blocking=True)
+            self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg).to("cuda", non_blocking=True)
+        
+    def load_action_head(self,):
+        
+        if self.action_head is None:
+            self.action_head = Gemma2ForCausalLM(self.action_head_cfg).to("cuda", non_blocking=True)
+
+
+
+
+
+
+
+
+
+
+class QwenVlmInfinityHead(QwenVlmInfinityHeadGemmaActionHeadBase):
+    
+    def __init__(self, cfg: QwenVlmInfinityConfig):
+        super().__init__(cfg)
+        self.load_infinity()
+
+    def prepare_infinity_condition_input(self, vlm_inputs):
         for k, v in vlm_inputs.items():
             vlm_inputs[k] = v.to("cuda")
         v_of_last_layer = self.vlm.generate(**vlm_inputs, max_new_tokens=200, do_sample=False, return_dict_in_generate=True)["past_key_values"][-1][1]
@@ -193,14 +241,13 @@ class InfinityVlaModel(nn.Module):
         raw_features, _, _ = self.vae.encode_for_raw_features(next_frame, scale_schedule=vae_scale_schedule)
         x_BLC_wo_prefix, gt_ms_idx_Bl = self.bitwise_self_correction.flip_requant(vae_scale_schedule, next_frame, raw_features, "cuda") # x_BLC_wo_prefix: torch.Size([bs, 2*2+3*3+...+64*64, d or 4d])
         
-        return x_BLC_wo_prefix, gt_ms_idx_Bl
-            
-    def forward(self, vlm_inputs=None, next_frame=None):
-        v_of_last_layer, lens, cu_seqlens_k, max_len = self.prepare_condition_input(vlm_inputs) # torch.bfloat16, ...
+        return x_BLC_wo_prefix, gt_ms_idx_Bl        
+
+                   
+    def forward(self, vlm_inputs=None, next_frame=None,):
+        v_of_last_layer, lens, cu_seqlens_k, max_len = self.prepare_infinity_condition_input(vlm_inputs) # torch.bfloat16, ...
         x_BLC_wo_prefix, gt_ms_idx_Bl = self.tokenize_image_with_vae(next_frame.to("cuda")) # troch.float32, List[torch.int32]
-        
-        # print(f"🚀🚀🚀🚀🚀🚀🚀 {v_of_last_layer.dtype=}, {x_BLC_wo_prefix.dtype=}")
-                
+                        
         # remember 1. not to convert v_of_last_layer to float, and 2. add to("cuda") after cu_seqlens_k, and 3. not to convert x_BLC_wo_prefix to float
         logits_BLV = self.infinity(
             label_B_or_BLT=(v_of_last_layer, lens, cu_seqlens_k.to("cuda"), max_len),
@@ -229,6 +276,10 @@ class InfinityVlaModel(nn.Module):
             - (cfg_uncond)
         ```
         """
+        self.action_head = None
+        self.load_infinity()
+        self.training_stage = 1
+        
         self.vae.eval()
         self.vlm.eval()
         self.infinity.train()
@@ -256,6 +307,10 @@ class InfinityVlaModel(nn.Module):
         - vlm: trainable
         - infinity: trainable
         """
+        self.action_head = None
+        self.load_infinity()
+        self.training_stage = 2
+        
         self.vae.eval()
         self.vlm.train()
         self.infinity.train()
@@ -271,48 +326,159 @@ class InfinityVlaModel(nn.Module):
         print(f"num. infinity trainable params: {int(sum(p.numel() for p in self.infinity.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VAE trainable params: {int(sum(p.numel() for p in self.vae.parameters() if p.requires_grad) // 1e6)}M")
         print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
-        print("==========================================================================\n\n")
-    
-    @property
-    def logit_scale(self):
-        pass
+        print("==========================================================================\n\n")  
 
-    def save(self, path):
-        pass
+
+
+
+
+class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
+    
+    def __init__(self, cfg: QwenVlmGemmaActionHeadConfig):
+        super().__init__(cfg)
+        self.load_action_head()
+        
+    def transform_dynamic_cache_to_hybrid_cache(self, dynamic_cache, batch_size):
+        """
+        QwenVlm uses dynamic cache, while Gemma-based (like Gemma2) model uses hybrid cache.
+        This function is to transform dynamic cache (kv cache of vlm) to hybrid cache so gemma tokens can attend to kv of vlm.
+        """
+        past_len = dynamic_cache.key_cache[0].shape[-2]
+        hybrid_cache: HybridCache = HybridCache(
+            device=self.hybrid_cache_cfg.device,
+            dtype=torch.bfloat16,
+            max_batch_size=batch_size,
+            config=self.action_head_cfg,
+            max_cache_len=past_len+self.hybrid_cache_cfg.max_extra_tokens,
+        )
+        hybrid_cache_kwargs = {
+            "cache_position": torch.arange(dynamic_cache.key_cache[0].shape[-2], device="cuda"),
+            "sliding_window": self.action_head_cfg.sliding_window,
+        }
+        
+        for dynamic_layer_idx, layer_idx in enumerate(self.layer_id_of_vlm_kv_used):
+            k,v = dynamic_cache[layer_idx]
+            hybrid_cache.update(
+                key_states=k,
+                value_states=v,
+                layer_idx=dynamic_layer_idx,
+                cache_kwargs=hybrid_cache_kwargs,
+            )
+        
+        return hybrid_cache
+    
+    def forward(self, vlm_inputs=None, action_tokens=None, action_labels=None):
+
+        kv_cache_from_vlm = self.vlm(**vlm_inputs)["past_key_values"]
+        hybrid_cache_for_gemma_bases_action_head = self.transform_dynamic_cache_to_hybrid_cache(
+            dynamic_cache=kv_cache_from_vlm, batch_size=action_tokens.shape[0]
+        )
+        loss = self.action_head(
+            input_ids=action_tokens.to("cuda"),
+            labels=action_labels.to("cuda"),
+            past_key_values=hybrid_cache_for_gemma_bases_action_head,
+            use_cache=True,
+        ).loss
+        
+        return loss
+
+    def get_into_training_stage_1(self,):
+        """
+        - Action head: trainable
+        - Vlm: frozen
+        """
+        self.vae, self.infinity, self.bitwise_self_correction = None, None, None
+        self.training_stage = 1
+        
+        self.action_head.train()
+        self.vlm.eval()
+        for param in self.action_head.parameters():
+            param.requires_grad = True
+        for param in self.vlm.parameters():
+            param.requires_grad = False
+            
+        print("\n\n==========================================================================")
+        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only action head trainable)\n")
+        print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. Action Head trainable params: {int(sum(p.numel() for p in self.action_head.parameters() if p.requires_grad) // 1e6)}M")
+        print("==========================================================================\n\n")
+
+    
+    def get_into_training_stage_2(self,):
+        """
+        - Action head: trainable
+        - Vlm: trainable
+        """
+        self.vae, self.infinity, self.bitwise_self_correction = None, None, None
+        self.training_stage = 2
+        
+        self.action_head.train()
+        self.vlm.train()
+        for param in self.action_head.parameters():
+            param.requires_grad = True
+        for param in self.vlm.parameters():
+            param.requires_grad = True
+            
+        print("\n\n==========================================================================")
+        print("🚀🚀🚀🚀🚀🚀🚀 PAY ATTENTION:\nYOU ARE ENTERING TRAINING STATE 1 (only action head trainable)\n")
+        print(f"num. VLM trainable params: {int(sum(p.numel() for p in self.vlm.parameters() if p.requires_grad) // 1e6)}M")
+        print(f"num. Action Head trainable params: {int(sum(p.numel() for p in self.action_head.parameters() if p.requires_grad) // 1e6)}M")
+        print("==========================================================================\n\n")
+
+
 
 if __name__ == "__main__":
-    # vlm_cfg = VlmModelConfig()
-    # infinity_cfg = InfinityConfig()
-    # vae_cfg = VaeConfig()
-    # bsc_cfg = BscConfig()
-    
-    cfg = InfinityVlaConfig()
-    # use omegacfg to deal with all cfgs in cfg
-    import omegaconf
-    cfg = omegaconf.OmegaConf.create(cfg)
-    
-    
-    model = instantiate_with_cfg(cfg=cfg)
-    model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
     
     from VideoPlan.trainer.datasetss.libero_lerobot_dataset import LiberoLerobotDatasetConfig
     datacfg = LiberoLerobotDatasetConfig()
-    dataset = instantiate_with_cfg(cfg=datacfg, split=datacfg.train_split_name)
+    dataset = instantiate_with_cfg(cfg=datacfg, split="validation_unique")
     dataloader = torch.utils.data.DataLoader(
         dataset,
         shuffle=False,
-        batch_size=8,
+        batch_size=2,
         collate_fn=dataset.collate_fn,
         num_workers=0
     )
+
+
+
+
+
+
+
+    TEST_CASE = "vla_without_infinity"
     
-    # criterion
-    from VideoPlan.trainer.criterions.infinity_criterion import InfinityVlmCriterionConfig
-    criterion_cfg = InfinityVlmCriterionConfig()
-    criterion = instantiate_with_cfg(cfg=criterion_cfg)
-    
-    # forward
-    for batch in dataloader:
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            out = model(vlm_inputs=batch["vlm_inputs"], next_frame=batch["future_img"])
-            import IPython; IPython.embed();
+    if TEST_CASE == "vlm_with_infinity":
+        cfg = QwenVlmInfinityConfig()
+        # use omegacfg to deal with all cfgs in cfg
+        import omegaconf
+        cfg = omegaconf.OmegaConf.create(cfg)
+        
+        
+        model = instantiate_with_cfg(cfg=cfg)
+        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
+        
+        # forward
+        for batch in dataloader:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                out = model(vlm_inputs=batch["vlm_inputs"], next_frame=batch["future_img"])
+                import IPython; IPython.embed();
+                
+                
+                
+    if TEST_CASE == "vla_without_infinity":
+        cfg = QwenVlmGemmaActionHeadConfig()
+        
+        import omegaconf
+        cfg = omegaconf.OmegaConf.create(cfg)
+        model = instantiate_with_cfg(cfg=cfg).to(torch.bfloat16)
+        
+        # forward
+        for batch in dataloader:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                out = model(vlm_inputs=batch["vlm_inputs"].to("cuda").to(torch.bfloat16),
+                            action_tokens=batch["action_tokens"].to("cuda"),
+                            action_labels=batch["action_labels"].to("cuda"))
+                import IPython; IPython.embed();
+
+        
