@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Tuple
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 import torch
+import numpy as np
 from torch.utils.data._utils.collate import default_collate
 from PIL import Image
 from accelerate.logging import get_logger
@@ -108,11 +109,8 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         [214,290]
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda fps=fps: {
-        # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
         "image": [-0.8, -0.6, -0.4, -0.2, 0.],
-        # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
-        # "state": [-0.2, -0.1, 0, 0.1],
-        # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
+        "state": [-0.8, -0.6, -0.4, -0.2, 0.],
         "actions": [t / fps for t in range(10)],
     })
 
@@ -188,7 +186,7 @@ class LiberoLerobotDataset(BaseDataset):
                 "role": "user",
                 "content": [
                     {"type": "video"},
-                    {"type": "text", "text": f"The robot should {task}."},
+                    {"type": "text", "text": f"{task}."}, # "Task: {task}, State: {state};\nAction: "
                 ],
             }
         ] for task in task_descriptions]
@@ -208,6 +206,18 @@ class LiberoLerobotDataset(BaseDataset):
 
         return x_BLC_wo_prefix, gt_ms_idx_Bl
     
+    def process_state_inputs_as_string_for_FAST(self, state, task):
+        cleaned_text = task.lower().strip().replace("_", " ")
+
+        # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
+        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
+
+        # Convention: prefix includes prompt and string-representation of state, followed by ';'
+        state_str = " ".join(map(str, discretized_state))
+        task_and_state_string = f"Task: {cleaned_text}, State: {state_str};\nAction: "
+        
+        return task_and_state_string
+    
     def process_action_inputs(self, actions):
         action_tokens = self.action_tokenizer(actions)
         action_tokens, action_labels = self.pad_action_tokens_for_autoregressive_input(action_tokens)
@@ -216,6 +226,8 @@ class LiberoLerobotDataset(BaseDataset):
     # TODO: check how to define the __getitem__ method
     def __getitem__(self, idx):
         example = self.dataset[idx]
+        
+        example["task"] = self.process_state_inputs_as_string_for_FAST(example["state"], example["task"])
         return example
 
     def collate_fn(self, batch):
@@ -238,6 +250,7 @@ class LiberoLerobotDataset(BaseDataset):
             - attention_mask
         """
         collated_batch = default_collate(batch)
+        collated_batch.pop("state")
         
         # 'collated_batch["image"]' has shape [batch_size, seq_len, 3, 256, 256]
         full_images = collated_batch["image"]
@@ -255,6 +268,7 @@ class LiberoLerobotDataset(BaseDataset):
         # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
         # add vlm_inputs to example
         collated_batch.pop("actions")
+        collated_batch.pop("wrist_image") # NOTE: temp no use wrist img
         collated_batch.pop(self.cfg.history_imgs_name) # free memory
         collated_batch.pop(self.cfg.task_description_name) # free memory
         collated_batch["vlm_inputs"] = vlm_inputs
@@ -280,6 +294,7 @@ if __name__ == "__main__":
         batch_size=4,
         num_workers=0,
         collate_fn=dataset.collate_fn,
+        shuffle=False,
     )
     
     for batch in dataloader:
