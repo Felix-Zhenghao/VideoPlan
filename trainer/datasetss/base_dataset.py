@@ -10,7 +10,7 @@ class BaseDatasetConfig:
     test_split_name: str = "test"
 
     batch_size: int = 32
-    num_workers: int = 2
+    num_workers: int = 0
     drop_last: bool = True
 
 

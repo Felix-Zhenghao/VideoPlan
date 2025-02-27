@@ -61,10 +61,6 @@ class PadActionTokensForAutoregressiveInput:
         #   => Handle padding via RNN Utils => `pad_sequence`
         action_tokens = pad_sequence(action_tokens, batch_first=True, padding_value=self.pad_token_id)
         
-        # create autoregressive labels, if the label is pad_token_id, make it ignore_index
-        labels = action_tokens.clone()
-        labels = pad_sequence(action_tokens, batch_first=True, padding_value=self.ignore_index)
-        
         # at the beginning of the sequence, add bos_token_id
         action_tokens = torch.cat([
             torch.full((action_tokens.shape[0], 1), self.bos_token_id, dtype=action_tokens.dtype),
