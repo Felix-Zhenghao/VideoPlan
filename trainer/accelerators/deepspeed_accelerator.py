@@ -39,9 +39,9 @@ class DeepSpeedConfig:
     scheduler: dict = field(default_factory=lambda: {
         "type": "WarmupLR",
         "params": {
-            "warmup_min_lr": "auto",
+            "warmup_min_lr": 5e-6,
             "warmup_max_lr": 2e-5,
-            "warmup_num_steps": "auto",
+            "warmup_num_steps": 250,
         }
     })
     zero_optimization: dict = field(default_factory=lambda: {

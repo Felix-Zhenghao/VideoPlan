@@ -184,7 +184,7 @@ class QwenVlmInfinityHeadGemmaActionHeadBase(nn.Module):
         
         # only instantiate vlm when initialize the model
         # TODO: modify training stages to add model loading logics
-        self.vlm = instantiate(self.vlm_cfg).to("cuda", non_blocking=True)
+        self.vlm = instantiate(self.vlm_cfg)
         self.training_stage = 0
         
         self.vae, self.infinity, self.bitwise_self_correction, self.action_head = None, None, None, None
@@ -192,14 +192,14 @@ class QwenVlmInfinityHeadGemmaActionHeadBase(nn.Module):
     def load_infinity(self):
 
         if self.vae is None and self.infinity is None and self.bitwise_self_correction is None:
-            self.vae = load_visual_tokenizer(self.vae_cfg).to("cuda", non_blocking=True)
-            self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae).to("cuda", non_blocking=True)
-            self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg).to("cuda", non_blocking=True)
+            self.vae = load_visual_tokenizer(self.vae_cfg)
+            self.infinity = Infinity(**self.infinity_cfg, vae_local=self.vae)
+            self.bitwise_self_correction = BitwiseSelfCorrection(self.vae, self.bsc_cfg)
         
     def load_action_head(self,):
         
         if self.action_head is None:
-            self.action_head = Gemma2ForCausalLM(self.action_head_cfg).to("cuda", non_blocking=True)
+            self.action_head = Gemma2ForCausalLM(self.action_head_cfg)
 
 
 
@@ -338,7 +338,7 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
         super().__init__(cfg)
         self.load_action_head()
         
-    def transform_dynamic_cache_to_hybrid_cache(self, dynamic_cache, batch_size):
+    def transform_dynamic_cache_to_hybrid_cache(self, dynamic_cache, batch_size, action_len):
         """
         QwenVlm uses dynamic cache, while Gemma-based (like Gemma2) model uses hybrid cache.
         This function is to transform dynamic cache (kv cache of vlm) to hybrid cache so gemma tokens can attend to kv of vlm.
@@ -364,14 +364,14 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
                 layer_idx=dynamic_layer_idx,
                 cache_kwargs=hybrid_cache_kwargs,
             )
-        
+
         return hybrid_cache
     
     def forward(self, vlm_inputs=None, action_tokens=None, action_labels=None):
 
         kv_cache_from_vlm = self.vlm(**vlm_inputs)["past_key_values"]
         hybrid_cache_for_gemma_bases_action_head = self.transform_dynamic_cache_to_hybrid_cache(
-            dynamic_cache=kv_cache_from_vlm, batch_size=action_tokens.shape[0]
+            dynamic_cache=kv_cache_from_vlm, batch_size=action_tokens.shape[0], action_len=action_tokens.shape[1]
         )
         loss = self.action_head(
             input_ids=action_tokens.to("cuda"),
@@ -428,9 +428,11 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
 
 
 if __name__ == "__main__":
+    import omegaconf
     
     from VideoPlan.trainer.datasetss.libero_lerobot_dataset import LiberoLerobotDatasetConfig
     datacfg = LiberoLerobotDatasetConfig()
+    datacfg = omegaconf.OmegaConf.create(datacfg)
     dataset = instantiate_with_cfg(cfg=datacfg, split="validation_unique")
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -468,8 +470,6 @@ if __name__ == "__main__":
                 
     if TEST_CASE == "vla_without_infinity":
         cfg = QwenVlmGemmaActionHeadConfig()
-        
-        import omegaconf
         cfg = omegaconf.OmegaConf.create(cfg)
         model = instantiate_with_cfg(cfg=cfg).to(torch.bfloat16)
         

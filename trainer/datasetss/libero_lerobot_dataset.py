@@ -109,7 +109,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda fps=fps: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-0.3, -0.2, -0.1, 0., 0.1],
+        "image": [-0.8, -0.6, -0.4, -0.2, 0.],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
@@ -148,7 +148,9 @@ class LiberoLerobotDataset(BaseDataset):
         self.dataset = self.load_hf_dataset(self.split)
         self.vlm_processor = instantiate(cfg.vlm_processor)
         self.action_tokenizer = instantiate(cfg.action_tokenizer)
-        self.pad_action_tokens_for_autoregressive_input = cfg.pad_action_tokens_for_autoregressive_input
+        self.pad_action_tokens_for_autoregressive_input = PadActionTokensForAutoregressiveInput(
+            **cfg.pad_action_tokens_for_autoregressive_input
+        )
 
     def load_hf_dataset(self, split: str) -> Dataset:
         if split == self.cfg.train_split_name:
@@ -186,7 +188,7 @@ class LiberoLerobotDataset(BaseDataset):
                 "role": "user",
                 "content": [
                     {"type": "video"},
-                    {"type": "text", "text": f"The video I give you shows the robot doing the task {task}. Describe things on the table and the whole environment in great details. Finally describe what you think the robot should do next."},
+                    {"type": "text", "text": f"The robot should {task}."},
                 ],
             }
         ] for task in task_descriptions]
@@ -269,8 +271,9 @@ if __name__ == "__main__":
     """
     Unit Test for dataset loading
     """
-    
+    import omegaconf
     cfg = LiberoLerobotDatasetConfig()
+    cfg = omegaconf.OmegaConf.create(cfg)
     dataset = LiberoLerobotDataset(cfg, split="validation_unique")
     dataloader = torch.utils.data.DataLoader(
         dataset,

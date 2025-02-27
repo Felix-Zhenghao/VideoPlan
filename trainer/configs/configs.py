@@ -16,7 +16,7 @@ from trainer.tasks.base_task import BaseTaskConfig
 defaults = [
     {"accelerator": "deepspeed"},
     {"task": "infinity_vlm"},
-    {"model": "infinity_vlm"},
+    {"model": "vla_without_infinity"},
     {"criterion": "infinity_vlm"},
     {"dataset": "libero"},
     {"optimizer": "dummy"},
@@ -43,4 +43,4 @@ class TrainerConfig:
     debug: DebugConfig = field(default_factory=lambda: 
         DebugConfig()
     )
-    output_dir: str = "outputs"
+    output_dir: str = "outputs_vla_without_infinity_experiment"
