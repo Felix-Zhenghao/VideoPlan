@@ -56,7 +56,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def load_dataloaders(cfg: DictConfig) -> Any:
     dataloaders = {}
-    for split in [cfg.train_split_name, cfg.valid_split_name, cfg.test_split_name]:
+    for split in [cfg.train_split_name]:
         dataset = instantiate_with_cfg(cfg, split=split)
         should_shuffle = split == cfg.train_split_name
         dataloaders[split] = torch.utils.data.DataLoader(
@@ -66,10 +66,8 @@ def load_dataloaders(cfg: DictConfig) -> Any:
             collate_fn=dataset.collate_fn,
             num_workers=cfg.num_workers
         )
-        
-        if split == cfg.valid_split_name:
-            valid_episode_length = dataset.cfg.validation_episodes_length
-    return dataloaders, valid_episode_length
+
+    return dataloaders
 
 
 def load_optimizer(cfg: DictConfig, model: nn.Module):
@@ -122,7 +120,7 @@ def main(cfg: TrainerConfig) -> None:
     logger.info(f"Loading lr scheduler")
     lr_scheduler = load_scheduler(cfg.lr_scheduler, optimizer)
     logger.info(f"Loading dataloaders")
-    split2dataloader, valid_episodes_length = load_dataloaders(cfg.dataset)
+    split2dataloader = load_dataloaders(cfg.dataset)
 
     dataloaders = list(split2dataloader.values())
     model, optimizer, lr_scheduler, *dataloaders = accelerator.prepare(model, optimizer, lr_scheduler, *dataloaders)
@@ -151,8 +149,8 @@ def main(cfg: TrainerConfig) -> None:
         f"num. model trainable params: {int(sum(p.numel() for p in model.parameters() if p.requires_grad) // 1e6)}M")
     logger.info(f"criterion: {criterion.__class__.__name__}")
     logger.info(f"num. train examples: {len(split2dataloader[cfg.dataset.train_split_name].dataset)}")
-    logger.info(f"num. valid examples: {len(split2dataloader[cfg.dataset.valid_split_name].dataset)}")
-    logger.info(f"num. test examples: {len(split2dataloader[cfg.dataset.test_split_name].dataset)}")
+    # logger.info(f"num. valid examples: {len(split2dataloader[cfg.dataset.valid_split_name].dataset)}")
+    # logger.info(f"num. test examples: {len(split2dataloader[cfg.dataset.test_split_name].dataset)}")
 
     for epoch in range(accelerator.cfg.num_epochs):
         train_loss, lr = 0.0, 0.0
@@ -180,6 +178,7 @@ def main(cfg: TrainerConfig) -> None:
             if (accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2) or (not accelerator.cfg.enable_stage_1 and not accelerator.has_changed_to_stage_2):
                 model.get_into_training_stage_2()
                 accelerator.has_changed_to_stage_2 = True
+                accelerator.has_changed_to_stage_1 = True
             elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
                 model.get_into_training_stage_1()
                 accelerator.has_changed_to_stage_1 = True

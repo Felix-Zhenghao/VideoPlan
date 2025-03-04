@@ -1,10 +1,12 @@
 import sys
 import os
 sys.path.append(f"{os.getcwd()}/video_gen/")
+os.environ["HF_HOME"] = "/data/czh/.cache/huggingface"
 
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Optional, List, Dict, Tuple
+from itertools import chain
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 import torch
@@ -105,15 +107,17 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         [214,290]
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda fps=fps: {
-        "image": [-0.8, -0.6, -0.4, -0.2, 0.],
-        "state": [-0.8, -0.6, -0.4, -0.2, 0.],
-        "actions": [t / fps for t in range(10)],
+        "image": [-0.6, -0.4, -0.2, 0.],
+        "state": [-0.6, -0.4, -0.2, 0.],
+        "wrist_image": [-0.6, -0.4, -0.2, 0.],
+        "actions": [t / fps for t in range(50)],
     })
 
     # columns
     task_description_name: str = "task"
     history_imgs_name: str = "image"
     future_imgs_name: str = "future_image"
+    wrist_imgs_name: str = "wrist_image"
     
     apply_spatial_patchify: bool = False
     future_img_length: int = 1
@@ -145,6 +149,9 @@ class LiberoLerobotDataset(BaseDataset):
         self.pad_action_tokens_for_autoregressive_input = PadActionTokensForAutoregressiveInput(
             **cfg.pad_action_tokens_for_autoregressive_input
         )
+        self.metadata = LeRobotDatasetMetadata(self.cfg.dataset_name, local_files_only=True)
+        
+        self.state_stats = self.metadata.stats['state']
 
     def load_hf_dataset(self, split: str) -> Dataset:
         if split == self.cfg.train_split_name:
@@ -175,8 +182,14 @@ class LiberoLerobotDataset(BaseDataset):
         return dataset
 
     def process_vlm_inputs(self, example):
+        
         task_descriptions = example[self.cfg.task_description_name]
         history_imgs = example[self.cfg.history_imgs_name]
+        wrist_imgs = example[self.cfg.wrist_imgs_name] if hasattr(self.cfg, "wrist_imgs_name") else None
+        
+        if wrist_imgs is not None:
+            history_imgs = torch.cat([history_imgs, wrist_imgs], dim=1)
+        
         prompts = [[
             {
                 "role": "user",
@@ -202,10 +215,16 @@ class LiberoLerobotDataset(BaseDataset):
 
         return x_BLC_wo_prefix, gt_ms_idx_Bl
     
+    def normalize_state(self, state_array):
+        """Normalize state array to [-1, 1]"""
+        ranges = self.state_stats['max'] - self.state_stats['min']
+        return 2 * (state_array - self.state_stats['min']) / ranges - 1
+    
     def process_state_inputs_as_string_for_FAST(self, state, task):
         cleaned_text = task.lower().strip().replace("_", " ")
 
         # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
+        state = self.normalize_state(state)
         discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
 
         # Convention: prefix includes prompt and string-representation of state, followed by ';'
@@ -215,8 +234,23 @@ class LiberoLerobotDataset(BaseDataset):
         return task_and_state_string
     
     def process_action_inputs(self, actions):
-        action_tokens = self.action_tokenizer(actions)
-        action_tokens, action_labels = self.pad_action_tokens_for_autoregressive_input(action_tokens)
+        """
+        The action toknizer is trained to tokenize 1 second of actions.
+        So if the action is longer than 1 second, we need to chunk the actions into 1 second chunks.
+        """
+        action_horizon = actions.shape[1]
+        chunk_size = 10
+        chunks = [self.action_tokenizer(actions[:, i:i+chunk_size]) for i in range(0, action_horizon, chunk_size)]
+        for chunk in chunks:
+            for i in range(actions.shape[0]):
+                chunk[i].append(2050) # special token 2050 to signal the end of a chunk so that we can feed 1 second action to the decoder
+
+        action_tokens_list = [
+            list(chain.from_iterable(chunk[i] for chunk in chunks))
+            for i in range(actions.shape[0])
+        ]
+        action_tokens, action_labels = self.pad_action_tokens_for_autoregressive_input(action_tokens_list)
+
         return action_tokens, action_labels
 
     # TODO: check how to define the __getitem__ method
@@ -248,15 +282,6 @@ class LiberoLerobotDataset(BaseDataset):
         collated_batch = default_collate(batch)
         collated_batch.pop("state")
         
-        # 'collated_batch["image"]' has shape [batch_size, seq_len, 3, 256, 256]
-        full_images = collated_batch["image"]
-
-        # Split the images
-        collated_batch["image"] = full_images[:, :-self.cfg.future_img_length, ...]        # [batch_size, seq_len - future_img_len, 3, 256, 256]
-        collated_batch["future_img"] = full_images[:, -self.cfg.future_img_length:, ...]   # [batch_size, future_img_len, 3, 256, 256]
-        
-        collated_batch["future_img"] = collated_batch["future_img"].float().div(255).squeeze(1) if collated_batch["future_img"].shape[1] == 1 else collated_batch["future_img"].float().div(255).view(-1, 3, 256, 256)
-
         vlm_inputs = self.process_vlm_inputs(collated_batch)
         
         action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
@@ -264,8 +289,8 @@ class LiberoLerobotDataset(BaseDataset):
         # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
         # add vlm_inputs to example
         collated_batch.pop("actions")
-        collated_batch.pop("wrist_image") # NOTE: temp no use wrist img
         collated_batch.pop(self.cfg.history_imgs_name) # free memory
+        collated_batch.pop(self.cfg.wrist_imgs_name) # free memory
         collated_batch.pop(self.cfg.task_description_name) # free memory
         collated_batch["vlm_inputs"] = vlm_inputs
         collated_batch["action_tokens"] = action_tokens

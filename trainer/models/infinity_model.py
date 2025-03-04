@@ -4,6 +4,7 @@ sys.path.append(f"{os.getcwd()}/video_gen/")
 sys.path.append(f"{os.getcwd()}/video_gen/VideoPlan/")
 sys.path.append(f"{os.getcwd()}/video_gen/Infinity/")
 
+import gc
 from typing import Any, Optional, List
 from dataclasses import dataclass, field
 from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
@@ -73,12 +74,12 @@ class ActionHeadConfig:
     torch_dtype: str = "bfloat16" # NOTE
     transformers_version: str = "4.42.4"
     use_cache: bool = True
-    vocab_size: int = 2050 # NOTE
+    vocab_size: int = 2051 # NOTE: special tokens: bos, eos(pad), action chunk split signal
     _attn_implementation: str = "eager"
     
 @dataclass
 class VlaHybridCacheConfig:
-    max_extra_tokens: int = 25
+    max_extra_tokens: int = 200
     device: str = "cuda"
 
 @dataclass
@@ -338,7 +339,7 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
         super().__init__(cfg)
         self.load_action_head()
         
-    def transform_dynamic_cache_to_hybrid_cache(self, dynamic_cache, batch_size, action_len):
+    def transform_dynamic_cache_to_hybrid_cache(self, dynamic_cache, batch_size):
         """
         QwenVlm uses dynamic cache, while Gemma-based (like Gemma2) model uses hybrid cache.
         This function is to transform dynamic cache (kv cache of vlm) to hybrid cache so gemma tokens can attend to kv of vlm.
@@ -371,8 +372,12 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
 
         kv_cache_from_vlm = self.vlm(**vlm_inputs)["past_key_values"]
         hybrid_cache_for_gemma_bases_action_head = self.transform_dynamic_cache_to_hybrid_cache(
-            dynamic_cache=kv_cache_from_vlm, batch_size=action_tokens.shape[0], action_len=action_tokens.shape[1]
+            dynamic_cache=kv_cache_from_vlm, batch_size=action_tokens.shape[0],
         )
+        
+        del kv_cache_from_vlm
+        gc.collect()
+        
         loss = self.action_head(
             input_ids=action_tokens.to("cuda"),
             labels=action_labels.to("cuda"),
@@ -381,6 +386,31 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
         ).loss
         
         return loss
+    
+    def infer_action_tokens(self, vlm_inputs=None):
+        """
+        Output action tokens. Need to further call `tokenizer.decode(output)`
+        """
+        kv_cache_from_vlm = self.vlm(**vlm_inputs)["past_key_values"]
+        hybrid_cache_for_gemma_bases_action_head = self.transform_dynamic_cache_to_hybrid_cache(
+            dynamic_cache=kv_cache_from_vlm, batch_size=vlm_inputs["input_ids"].shape[0]
+        )
+
+        del kv_cache_from_vlm
+        gc.collect()
+
+        past_seq_len = hybrid_cache_for_gemma_bases_action_head.get_seq_length()
+        generated = self.action_head.generate(
+            input_ids=torch.full_like(torch.randn(vlm_inputs["input_ids"].shape[0], past_seq_len+1), self.action_head_cfg.bos_token_id, device="cuda", dtype=torch.long),
+            cache_implementation=None,
+            past_key_values=hybrid_cache_for_gemma_bases_action_head, # TODO: expand max_cache_len of the kv cache according to max_length
+            use_cache=True,
+            # max_new_tokens=20, # TODO: delete this in real inference
+        )
+        
+        action_tokens = generated[:, past_seq_len+1:-1]
+
+        return action_tokens
 
     def get_into_training_stage_1(self,):
         """
