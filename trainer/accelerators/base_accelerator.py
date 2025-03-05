@@ -63,16 +63,16 @@ class BaseAcceleratorConfig:
     eval_on_start: bool = True
     project_name: str = "vla_FAST_0.5B"
     max_grad_norm: float = 1.0
-    save_steps: int = 579
+    save_steps: int = 235
     metric_name: str = "accuracy"
     metric_mode: MetricMode = MetricMode.MAX
-    limit_num_checkpoints: int = 5
+    limit_num_checkpoints: int = 10
     save_only_if_best: bool = False
     dynamo_backend: DynamoBackend = DynamoBackend.NO
     keep_best_ckpts: bool = False
     
     # training stage
-    stage_1_step: int = 1158
+    stage_1_step: int = 235
     enable_stage_1: bool = True
 
 

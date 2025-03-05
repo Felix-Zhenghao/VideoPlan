@@ -405,7 +405,7 @@ class QwenVlmGemmaActionHead(QwenVlmInfinityHeadGemmaActionHeadBase):
             cache_implementation=None,
             past_key_values=hybrid_cache_for_gemma_bases_action_head, # TODO: expand max_cache_len of the kv cache according to max_length
             use_cache=True,
-            # max_new_tokens=20, # TODO: delete this in real inference
+            max_new_tokens=200, # TODO: delete this in real inference
         )
         
         action_tokens = generated[:, past_seq_len+1:-1]

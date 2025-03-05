@@ -45,7 +45,7 @@ class BscConfig:
 
 @dataclass
 class ActionTokenizer:
-    _target_: str = "transformers.AutoProcessor.from_pretrained"
+    _target_: str = "Felix-Zhenghao/Libero-FAST"
     pretrained_model_name_or_path: str = "physical-intelligence/fast"
     trust_remote_code: bool = True
 
@@ -95,7 +95,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     fps: int = 10
     num_episodes: int = 400
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
-        list(range(num_episodes))
+        [7, 8, 9, 13, 25, 26, 29, 30, 39, 41, 63, 69, 71, 74, 77, 79, 82, 83, 92, 96, 98, 101, 102, 118, 124, 132, 135, 137, 148, 156, 160, 161, 163, 171, 174, 181, 188, 195, 196, 199, 200, 205, 208, 219, 221, 222, 223, 234, 237, 238, 241, 246, 250, 256, 260, 265, 266, 275, 281, 286, 289, 291, 293, 297, 308, 317, 318, 331, 334, 336, 340, 350, 352, 359, 363, 373]
     )
     validation_episodes: Optional[List[int]] = field(default_factory=lambda:
         [0, 50]
@@ -107,10 +107,10 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         [214,290]
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda fps=fps: {
-        "image": [-0.6, -0.4, -0.2, 0.],
-        "state": [-0.6, -0.4, -0.2, 0.],
-        "wrist_image": [-0.6, -0.4, -0.2, 0.],
-        "actions": [t / fps for t in range(50)],
+        "image": [-0.3, -0.2, -0.1, 0.],
+        "state": [-0.3, -0.2, -0.1, 0.],
+        "wrist_image": [-0.3, -0.2, -0.1, 0.],
+        "actions": [t / fps for t in range(20)],
     })
 
     # columns

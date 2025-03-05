@@ -43,4 +43,4 @@ class TrainerConfig:
     debug: DebugConfig = field(default_factory=lambda: 
         DebugConfig()
     )
-    output_dir: str = "outputs_vla_without_infinity_experiment"
+    output_dir: str = "aaaaaa_very_small_experiments"
