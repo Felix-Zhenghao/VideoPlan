@@ -27,9 +27,20 @@ class BaseModelConfig:
 
 @dataclass
 class VlmModelConfig(BaseModelConfig):
+    """
+    0.8B VLM configuration. Backbone: Qwen2-0.5B.
+    """
     _target_: str = "transformers.LlavaOnevisionForConditionalGeneration.from_pretrained"
     pretrained_model_name_or_path: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
-    
+
+@dataclass
+class Vlm2bModelConfig(BaseModelConfig):
+    """
+    2B VLM configuration. Backbone: Qwen2-1.5B.
+    """
+    _target_: str = "transformers.Qwen2VLForConditionalGeneration.from_pretrained"
+    pretrained_model_name_or_path: str = "Qwen/Qwen2-VL-2B-Instruct"
+
 @dataclass
 class BscConfig:
     noise_apply_layers: int = 13
@@ -46,6 +57,9 @@ class VaeConfig(BaseModelConfig):
 
 @dataclass
 class ActionHeadConfig:
+    """
+    ActionHead configuration for 0.8B VLM.
+    """
     _target_: str = "transformers.Gemma2Config"
     architectures: List[str] = field(default_factory=lambda: ["Gemma2ForCausalLM"])
     attention_bias: bool = False
@@ -54,7 +68,7 @@ class ActionHeadConfig:
     bos_token_id: int = 2049 # NOTE
     cache_implementation: str = "hybrid"
     eos_token_id: int = 2048 # NOTE
-    final_logit_softcapping: float = 30.0
+    final_logit_softcapping: float = 30
     head_dim: int = 64 # NOTE
     hidden_act: str = "gelu_pytorch_tanh"
     hidden_activation: str = "gelu_pytorch_tanh"
@@ -64,7 +78,43 @@ class ActionHeadConfig:
     max_position_embeddings: int = 8192
     model_type: str = "gemma2"
     num_attention_heads: int = 14 # NOTE
-    num_hidden_layers: int = 12 # TODO: make it compatible with Qwen with only 12 hidden layers
+    num_hidden_layers: int = 12
+    num_key_value_heads: int = 2 # NOTE
+    pad_token_id: int = 2048 # NOTE
+    query_pre_attn_scalar: int = 256
+    rms_norm_eps: float = 1e-06
+    rope_theta: float = 10000.0
+    sliding_window: int = 4096
+    torch_dtype: str = "bfloat16" # NOTE
+    transformers_version: str = "4.42.4"
+    use_cache: bool = True
+    vocab_size: int = 2051 # NOTE: special tokens: bos, eos(pad), action chunk split signal
+    _attn_implementation: str = "eager"
+
+@dataclass
+class ActionHeadFor2bConfig:
+    """
+    ActionHead configuration for 2B VLM.
+    """
+    _target_: str = "transformers.Gemma2Config"
+    architectures: List[str] = field(default_factory=lambda: ["Gemma2ForCausalLM"])
+    attention_bias: bool = False
+    attention_dropout: float = 0.0
+    attn_logit_softcapping: float = 50.0
+    bos_token_id: int = 2049 # NOTE
+    cache_implementation: str = "hybrid"
+    eos_token_id: int = 2048 # NOTE
+    final_logit_softcapping: float = 30
+    head_dim: int = 128 # NOTE
+    hidden_act: str = "gelu_pytorch_tanh"
+    hidden_activation: str = "gelu_pytorch_tanh"
+    hidden_size: int = 1536 # NOTE
+    initializer_range: float = 0.02
+    intermediate_size: int = 3584 # NOTE: mlp_ratio = 4
+    max_position_embeddings: int = 8192
+    model_type: str = "gemma2"
+    num_attention_heads: int = 12 # NOTE
+    num_hidden_layers: int = 14
     num_key_value_heads: int = 2 # NOTE
     pad_token_id: int = 2048 # NOTE
     query_pre_attn_scalar: int = 256
@@ -138,10 +188,10 @@ class InfinityConfig(BaseModelConfig):
 class QwenVlmInfinityHeadGemmaActionHeadConfig(BaseModelConfig):
     _target_: str = "VideoPlan.trainer.models.infinity_model.QwenVlmInfinityHeadGemmaActionHeadBase"
     layer_id_of_vlm_kv_used: List[int] = field(default_factory=lambda: 
-        [1,3,5,7,9,11,13,15,17,19,21,23]
+        [1,3,5,7,9,11,13,15,17,19,21,23,25,27]                            # NOTE: if change vlm backbone, change this as well!!
     )
-    vlm_cfg: VlmModelConfig = field(default_factory=lambda:
-        VlmModelConfig()
+    vlm_cfg: Vlm2bModelConfig = field(default_factory=lambda:
+        Vlm2bModelConfig()                                                # NOTE: if change vlm backbone, change this as well!!
     )
     infinity_cfg: InfinityConfig = field(default_factory=lambda:
         InfinityConfig()
@@ -149,8 +199,8 @@ class QwenVlmInfinityHeadGemmaActionHeadConfig(BaseModelConfig):
     hybrid_cache_cfg: VlaHybridCacheConfig = field(default_factory=lambda:
         VlaHybridCacheConfig()
     )
-    action_head_cfg: ActionHeadConfig = field(default_factory=lambda:
-        ActionHeadConfig()
+    action_head_cfg: ActionHeadFor2bConfig = field(default_factory=lambda:
+        ActionHeadFor2bConfig()                                           # NOTE: if change vlm backbone, change this as well!!
     )
     vae_cfg: VaeConfig = field(default_factory=lambda:
         VaeConfig()

@@ -31,9 +31,21 @@ def simple_collate(batch, column_name):
 
 @dataclass
 class VlmProcessorConfig:
+    """
+    The 0.8B VLM (backbone: qwen2-0.5b)
+    """
     _target_: str = "transformers.AutoProcessor.from_pretrained"
     pretrained_model_name_or_path: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
-    
+
+@dataclass
+class Vlm2bProcessorConfig:
+    """
+    The 2B VLM (backbone: qwen2-1.5b)
+    """
+    _target_: str = "transformers.AutoProcessor.from_pretrained"
+    pretrained_model_name_or_path: str = "Qwen/Qwen2-VL-2B-Instruct"
+
+
 @dataclass
 class BscConfig:
     _target_: str = "Infinity.infinity.models.bitwise_self_correction.BitwiseSelfCorrection"
@@ -45,8 +57,8 @@ class BscConfig:
 
 @dataclass
 class ActionTokenizer:
-    _target_: str = "Felix-Zhenghao/Libero-FAST"
-    pretrained_model_name_or_path: str = "physical-intelligence/fast"
+    _target_: str = "transformers.AutoProcessor.from_pretrained"
+    pretrained_model_name_or_path: str = "physical-intelligence/fast" # TODO: use "Felix-Zhenghao/Libero-FAST"
     trust_remote_code: bool = True
 
 @dataclass
@@ -95,13 +107,14 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     fps: int = 10
     num_episodes: int = 400
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
-        [7, 8, 9, 13, 25, 26, 29, 30, 39, 41, 63, 69, 71, 74, 77, 79, 82, 83, 92, 96, 98, 101, 102, 118, 124, 132, 135, 137, 148, 156, 160, 161, 163, 171, 174, 181, 188, 195, 196, 199, 200, 205, 208, 219, 221, 222, 223, 234, 237, 238, 241, 246, 250, 256, 260, 265, 266, 275, 281, 286, 289, 291, 293, 297, 308, 317, 318, 331, 334, 336, 340, 350, 352, 359, 363, 373]
+        # [7, 8, 9, 13, 25, 26, 29, 30, 39, 41, 63, 69, 71, 74, 77, 79, 82, 83, 92, 96, 98, 101, 102, 118, 124, 132, 135, 137, 148, 156, 160, 161, 163, 171, 174, 181, 188, 195, 196, 199, 200, 205, 208, 219, 221, 222, 223, 234, 237, 238, 241, 246, 250, 256, 260, 265, 266, 275, 281, 286, 289, 291, 293, 297, 308, 317, 318, 331, 334, 336, 340, 350, 352, 359, 363, 373]
+        list(range(1261,1693))
     )
     validation_episodes: Optional[List[int]] = field(default_factory=lambda:
         [0, 50]
     )
     test_episodes: Optional[List[int]] = field(default_factory=lambda:
-        [0]
+        [8]
     )
     validation_episodes_length: List[int] = field(default_factory=lambda:
         [214,290]
@@ -125,8 +138,9 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
         [[1, 1, 1], [1, 2, 2], [1, 4, 4], [1, 6, 6], [1, 8, 8], [1, 12, 12], [1, 16, 16]]
     )
 
-    vlm_processor: VlmProcessorConfig = field(default_factory = lambda: 
-        VlmProcessorConfig()
+    # NOTE: to change vlm, you need to change the vlm_processor config here and only here
+    vlm_processor: Vlm2bProcessorConfig = field(default_factory = lambda: 
+        Vlm2bProcessorConfig()
     )
     bsc: Optional[BscConfig] = None
     action_tokenizer: ActionTokenizer = field(default_factory=lambda:
@@ -199,7 +213,7 @@ class LiberoLerobotDataset(BaseDataset):
                 ],
             }
         ] for task in task_descriptions]
-        prompts = [self.vlm_processor.apply_chat_template(prompt, add_generation_prompt=True) for prompt in prompts]
+        prompts = [self.vlm_processor.apply_chat_template(prompt, add_generation_prompt=False) for prompt in prompts]
         vlm_inputs = self.vlm_processor(videos=torch.unbind(history_imgs, dim=0), text=prompts, return_tensors='pt', padding=True)
         return vlm_inputs
 
@@ -229,7 +243,7 @@ class LiberoLerobotDataset(BaseDataset):
 
         # Convention: prefix includes prompt and string-representation of state, followed by ';'
         state_str = " ".join(map(str, discretized_state))
-        task_and_state_string = f"Task: {cleaned_text}, State: {state_str};\nAction: "
+        task_and_state_string = f"Videos include history observations of an agentview camera followed by history observations of a wrist camera. Task: {cleaned_text}, State: {state_str};\nAction: "
         
         return task_and_state_string
     
@@ -280,21 +294,21 @@ class LiberoLerobotDataset(BaseDataset):
             - attention_mask
         """
         collated_batch = default_collate(batch)
-        collated_batch.pop("state")
+        # collated_batch.pop("state")
         
-        vlm_inputs = self.process_vlm_inputs(collated_batch)
+        # vlm_inputs = self.process_vlm_inputs(collated_batch)
         
-        action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
+        # action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
 
-        # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
-        # add vlm_inputs to example
-        collated_batch.pop("actions")
-        collated_batch.pop(self.cfg.history_imgs_name) # free memory
-        collated_batch.pop(self.cfg.wrist_imgs_name) # free memory
-        collated_batch.pop(self.cfg.task_description_name) # free memory
-        collated_batch["vlm_inputs"] = vlm_inputs
-        collated_batch["action_tokens"] = action_tokens
-        collated_batch["action_labels"] = action_labels
+        # # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
+        # # add vlm_inputs to example
+        # collated_batch.pop("actions")
+        # collated_batch.pop(self.cfg.history_imgs_name) # free memory
+        # collated_batch.pop(self.cfg.wrist_imgs_name) # free memory
+        # collated_batch.pop(self.cfg.task_description_name) # free memory
+        # collated_batch["vlm_inputs"] = vlm_inputs
+        # collated_batch["action_tokens"] = action_tokens
+        # collated_batch["action_labels"] = action_labels
 
         return collated_batch
 
