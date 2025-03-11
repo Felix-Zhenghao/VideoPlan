@@ -37,9 +37,9 @@ class BscConfig:
     
 @dataclass
 class VaeConfig(BaseModelConfig):
-    vae_type: int = 16
+    vae_type: int = 32
     apply_spatial_patchify: bool = False
-    vae_path: str = "/home/czh/.cache/huggingface/hub/models--Felix-Zhenghao--infinity_125M_0_5B_VLM/snapshots/569769515ac679871318ffafd0e578ed0d75bef0/8000.pt"
+    vae_path: str = "/data/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/6577e6454575816928a2a8477906c84a49356b9a/infinity_vae_d32reg.pth"
 
     
 @dataclass
@@ -93,6 +93,58 @@ class InfinityConfig(BaseModelConfig):
         [[1, 1, 1], [1, 2, 2], [1, 4, 4], [1, 6, 6], [1, 8, 8], [1, 12, 12], [1, 16, 16]]
     )
     d_vlm: int = 128
+    
+@dataclass
+class Infinity2bConfig(BaseModelConfig):
+    """
+    To instantiate from the config, need to add another param: vae_local
+    """
+    # _target_: str = "Infinity.infinity.models.infinity.Infinity"
+    text_channels: int = 2048
+    text_maxlen: int = 1300 # NOTE: should change this whenever change the history image num
+    embed_dim: int = 2048
+    depth: int = 32
+    num_heads: int = 16
+    mlp_ratio: float = 4.0
+    drop_rate: float = 0.0
+    drop_path_rate: float = 0.1
+    norm_eps: float = 1e-6
+    rms_norm: bool = False
+    shared_aln: bool = True
+    head_aln: bool = True
+    cond_drop_rate: float = 0.1
+    rand_uncond: bool = False
+    cross_attn_layer_scale: float = -1
+    nm0: bool = False
+    tau: float = 1.0
+    cos_attn: bool = True
+    swiglu: bool = False
+    raw_scale_schedule: Optional[Any] = None
+    head_depth: int = 1
+    top_p: float = 0.0
+    top_k: float = 0.0
+    customized_flash_attn: bool = True
+    fused_mlp: bool = False
+    fused_norm: bool = True
+    block_chunks: int = 8
+    checkpointing: str = "full-block"
+    pad_to_multiplier: int = 128
+    use_flex_attn: bool = True # NOTE
+    batch_size: int = 1
+    add_lvl_embeding_only_first_block: int = 1
+    use_bit_label: int = 1
+    rope2d_each_sa_layer: int = 1
+    rope2d_normalized_by_hw: int = 2
+    pn: str = "0.06M"
+    train_h_div_w_list: List[float] = field(default_factory=lambda:[1.000])
+    video_frames: int = 1
+    always_training_scales: int = 100
+    apply_spatial_patchify: bool = False
+    inference_mode: bool = False
+    scale_schedule: List[List[int]] = field(default_factory=lambda: 
+        [[1, 1, 1], [1, 2, 2], [1, 4, 4], [1, 6, 6], [1, 8, 8], [1, 12, 12], [1, 16, 16]]
+    )
+    d_vlm: int = 128
 
 @dataclass
 class InfinityVlmConfig(BaseModelConfig):
@@ -100,8 +152,8 @@ class InfinityVlmConfig(BaseModelConfig):
     vlm_cfg: VlmModelConfig = field(default_factory=lambda:
         VlmModelConfig()
     )
-    infinity_cfg: InfinityConfig = field(default_factory=lambda:
-        InfinityConfig()
+    infinity_cfg: Infinity2bConfig = field(default_factory=lambda:
+        Infinity2bConfig()
     )
     vae_cfg: VaeConfig = field(default_factory=lambda:
         VaeConfig()

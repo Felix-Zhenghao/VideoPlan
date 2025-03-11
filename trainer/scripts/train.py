@@ -134,8 +134,8 @@ def main(cfg: TrainerConfig) -> None:
 
     accelerator.init_training(cfg)
     
-    if accelerator.get_latest_checkpoint() is not None:
-        model.load_pretrained_infinity("/home/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/d4c15777e41bd36eb8eef5a854b018d19962b6d9/infinity_125M_256x256.pth")
+    # if accelerator.get_latest_checkpoint() is not None:
+    #     model.load_pretrained_infinity("/data/czh/.cache/huggingface/hub/models--FoundationVision--Infinity/snapshots/6577e6454575816928a2a8477906c84a49356b9a/infinity_2b_reg.pth")
 
     def evaluate():
         return
@@ -183,6 +183,7 @@ def main(cfg: TrainerConfig) -> None:
             if (accelerator.should_stage_2() and not accelerator.has_changed_to_stage_2) or (not accelerator.cfg.enable_stage_1 and not accelerator.has_changed_to_stage_2):
                 model.get_into_training_stage_2()
                 accelerator.has_changed_to_stage_2 = True
+                accelerator.has_changed_to_stage_1 = True
             elif not accelerator.should_stage_2() and not accelerator.has_changed_to_stage_1:
                 model.get_into_training_stage_1()
                 accelerator.has_changed_to_stage_1 = True

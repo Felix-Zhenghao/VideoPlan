@@ -34,7 +34,7 @@ class BscConfig:
     _target_: str = "Infinity.infinity.models.bitwise_self_correction.BitwiseSelfCorrection"
     noise_apply_layers=13
     noise_apply_requant=True
-    noise_apply_strength=0.1
+    noise_apply_strength=0.3
     apply_spatial_patchify=False
     debug_bsc=False
 
@@ -54,7 +54,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     fps: int = 10
     num_episodes: int = 400
     training_episodes: List[int] = field(default_factory=lambda num_episodes=num_episodes:
-        list(range(num_episodes))
+        list(range(1261,1693))
     )
     validation_episodes: Optional[List[int]] = field(default_factory=lambda:
         [0, 50]
@@ -67,7 +67,7 @@ class LiberoLerobotDatasetConfig(BaseDatasetConfig):
     )
     delta_timestamps: Dict[str, List[float]] = field(default_factory=lambda: {
         # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-        "image": [-1.0, -0.8, -0.6, -0.4, -0.2, 0., 0.2],
+        "image": [-0.6, -0.4, -0.2, 0., 0.2],
         # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 200 ms, 100 ms, and current frame
         # "state": [-0.2, -0.1, 0, 0.1],
         # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
@@ -198,8 +198,8 @@ class LiberoLerobotDataset(BaseDataset):
 
         # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
         # add vlm_inputs to example
-        collated_batch.pop(self.cfg.history_imgs_name) # free memory
-        collated_batch.pop(self.cfg.task_description_name) # free memory
+        # collated_batch.pop(self.cfg.history_imgs_name) # free memory
+        # collated_batch.pop(self.cfg.task_description_name) # free memory
         collated_batch["vlm_inputs"] = vlm_inputs
 
         return collated_batch
