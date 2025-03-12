@@ -294,21 +294,21 @@ class LiberoLerobotDataset(BaseDataset):
             - attention_mask
         """
         collated_batch = default_collate(batch)
-        # collated_batch.pop("state")
+        collated_batch.pop("state")
         
-        # vlm_inputs = self.process_vlm_inputs(collated_batch)
+        vlm_inputs = self.process_vlm_inputs(collated_batch)
         
-        # action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
+        action_tokens, action_labels = self.process_action_inputs(collated_batch["actions"])
 
-        # # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
-        # # add vlm_inputs to example
-        # collated_batch.pop("actions")
-        # collated_batch.pop(self.cfg.history_imgs_name) # free memory
-        # collated_batch.pop(self.cfg.wrist_imgs_name) # free memory
-        # collated_batch.pop(self.cfg.task_description_name) # free memory
-        # collated_batch["vlm_inputs"] = vlm_inputs
-        # collated_batch["action_tokens"] = action_tokens
-        # collated_batch["action_labels"] = action_labels
+        # delete self.cfg.history_imgs_name and self.cfg.task_description_name from example
+        # add vlm_inputs to example
+        collated_batch.pop("actions")
+        collated_batch.pop(self.cfg.history_imgs_name) # free memory
+        collated_batch.pop(self.cfg.wrist_imgs_name) # free memory
+        collated_batch.pop(self.cfg.task_description_name) # free memory
+        collated_batch["vlm_inputs"] = vlm_inputs
+        collated_batch["action_tokens"] = action_tokens
+        collated_batch["action_labels"] = action_labels
 
         return collated_batch
 
